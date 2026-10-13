@@ -1,0 +1,15 @@
+{
+  "functions": {
+    "api/verify-asmodee-quote.py": { "maxDuration": 30 },
+    "api/reconcile.py": { "maxDuration": 30 },
+    "api/reconcile-ud.py": { "maxDuration": 30 },
+    "api/reconcile-acdd.py": { "maxDuration": 30 },
+    "api/reconcile-arrived-asmodee.py": { "maxDuration": 30 },
+    "api/reconcile-arrived-ud.py": { "maxDuration": 30 },
+    "api/reconcile-arrived-acdd.py": { "maxDuration": 30 },
+    "api/box-size.py": { "maxDuration": 30 },
+    "api/get-order-check.py": { "maxDuration": 30 },
+    "api/lookup-barcode.py": { "maxDuration": 30 },
+    "api/picking-list.py": { "maxDuration": 60 }
+  }
+}

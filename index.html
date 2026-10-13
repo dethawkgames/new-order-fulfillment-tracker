@@ -1,0 +1,1589 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Order Fulfillment Tracker — Detective Hawk Games</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Days+One&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --plum-dark: #38112F;
+    --plum: #58144B;
+    --coral: #EF3F45;
+    --coral-deep: #B12B2B;
+    --teal: #3BC0C6;
+    --teal-deep: #059B9C;
+    --gold: #FFD344;
+    --cream: #E2D4C3;
+    --paper: #FBF8F3;
+    --ink: #2A1622;
+    --ink-soft: #6b5a63;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+    margin: 0;
+    background: var(--cream);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .masthead {
+    background: linear-gradient(165deg, var(--plum-dark) 0%, var(--plum) 100%);
+    color: var(--cream);
+    padding: 36px 24px 30px;
+    position: relative;
+    overflow: hidden;
+  }
+  .masthead::after {
+    content: "";
+    position: absolute;
+    inset: auto 0 0 0;
+    height: 46px;
+    background-image: linear-gradient(transparent, transparent),
+      repeating-linear-gradient(90deg, rgba(255,211,68,0.10) 0 2px, transparent 2px 38px);
+    opacity: 0.5;
+    pointer-events: none;
+  }
+  .masthead-inner { max-width: 980px; margin: 0 auto; position: relative; z-index: 1; }
+  .eyebrow {
+    font-size: 12px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--gold);
+    font-weight: 700;
+    margin: 0 0 6px;
+  }
+  h1.title {
+    font-family: 'Days One', -apple-system, sans-serif;
+    font-size: 30px;
+    line-height: 1.15;
+    margin: 0 0 8px;
+    color: var(--cream);
+    letter-spacing: 0.01em;
+  }
+  .masthead p {
+    margin: 0;
+    font-size: 14.5px;
+    color: rgba(226, 212, 195, 0.85);
+    max-width: 640px;
+    line-height: 1.5;
+  }
+
+  .page {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 32px 24px 64px;
+  }
+
+  .card {
+    background: var(--paper);
+    border-radius: 14px;
+    padding: 28px;
+    box-shadow: 0 1px 2px rgba(56,17,47,0.06), 0 8px 24px rgba(56,17,47,0.07);
+    margin-bottom: 28px;
+    border: 1px solid rgba(56,17,47,0.06);
+  }
+
+  .card-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--teal-deep);
+    margin: 0 0 4px;
+  }
+  .card-label .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--teal);
+    display: inline-block;
+  }
+  h2.section-title {
+    font-family: 'Days One', -apple-system, sans-serif;
+    font-size: 19px;
+    margin: 0 0 6px;
+    color: var(--plum-dark);
+  }
+  .section-desc {
+    color: var(--ink-soft);
+    font-size: 13.5px;
+    line-height: 1.55;
+    margin: 0 0 20px;
+    max-width: 680px;
+  }
+
+  .dry-run-toggle { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; margin: 0 0 12px; cursor: pointer; }
+  .dry-run-toggle input { cursor: pointer; }
+  .upload-zone {
+    border: 2px dashed rgba(56,17,47,0.18);
+    border-radius: 12px;
+    padding: 36px 24px;
+    text-align: center;
+    background: rgba(59,192,198,0.04);
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .upload-zone.dragover {
+    border-color: var(--teal);
+    background: rgba(59,192,198,0.10);
+  }
+  .upload-zone p { margin: 0 0 12px; color: var(--ink-soft); font-size: 14px; }
+  input[type=file] {
+    margin: 0 0 16px;
+    font-size: 13.5px;
+    color: var(--ink-soft);
+  }
+
+  button {
+    background: var(--coral);
+    color: white;
+    border: none;
+    padding: 11px 22px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.12s, transform 0.05s;
+    font-family: inherit;
+  }
+  button:hover:not(:disabled) { background: var(--coral-deep); }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button:disabled { background: #c9bdc4; cursor: not-allowed; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 22px; font-size: 13.5px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid rgba(56,17,47,0.08); }
+  th {
+    background: rgba(56,17,47,0.04);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--ink-soft);
+    font-weight: 700;
+  }
+  tr:hover td { background: rgba(59,192,198,0.04); }
+
+  .status-match { color: #2f7a4f; font-weight: 600; }
+  .status-more { color: #b8762a; font-weight: 600; }
+  .status-less { color: var(--coral-deep); font-weight: 600; }
+  .status-missing { color: var(--coral-deep); font-weight: 700; }
+  .status-preorder { color: var(--teal-deep); font-weight: 700; }
+  .status-unexpected { color: #b8762a; font-weight: 600; }
+
+  .summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 22px;
+    margin: 18px 0 0;
+    padding: 16px 18px;
+    background: var(--plum-dark);
+    color: var(--cream);
+    border-radius: 10px;
+    font-size: 13.5px;
+  }
+  .summary .stat strong {
+    font-family: 'Days One', sans-serif;
+    font-size: 19px;
+    color: var(--gold);
+    display: block;
+    line-height: 1.2;
+  }
+  .summary .stat span { color: rgba(226,212,195,0.75); font-size: 12px; }
+
+  .loading { color: var(--ink-soft); font-size: 14px; }
+  .loading::before { content: "⏳ "; }
+  .error {
+    color: #fff;
+    background: var(--coral-deep);
+    padding: 13px 16px;
+    border-radius: 8px;
+    font-size: 14px;
+  }
+  .footnote { color: var(--ink-soft); font-size: 12.5px; margin-top: 16px; }
+  .not-on-invoice { margin-top: 16px; }
+  .not-on-invoice summary {
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--plum-dark);
+    padding: 8px 0;
+    list-style: none;
+  }
+  .not-on-invoice summary::-webkit-details-marker { display: none; }
+  .not-on-invoice summary::before { content: '▸ '; color: var(--coral); }
+  .not-on-invoice[open] summary::before { content: '▾ '; }
+  .not-on-invoice table { opacity: 0.75; }
+
+  .qr-supplier-head {
+    font-size: 13px; font-weight: 700; color: var(--plum-dark);
+    text-transform: uppercase; letter-spacing: 0.06em;
+    margin: 20px 0 8px;
+  }
+  .qr-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 0; border-bottom: 1px solid rgba(56,17,47,0.08);
+  }
+  .qr-row-title { flex: 1; font-size: 14px; }
+  .qr-row-sku { color: var(--ink-soft); font-size: 12px; }
+  .qr-row input[type=number] {
+    width: 64px; padding: 8px; font-size: 16px;
+    border: 1.5px solid rgba(56,17,47,0.18); border-radius: 6px;
+    text-align: center;
+  }
+  .qr-save-bar { margin-top: 18px; }
+
+  .box-dims-row {
+    display: flex; align-items: end; gap: 14px; flex-wrap: wrap; margin: 10px 0 16px;
+  }
+  .box-dims-row label {
+    display: flex; flex-direction: column; gap: 4px; font-size: 12px;
+    color: var(--ink-soft); font-weight: 600;
+  }
+  .box-dims-row input[type=number] {
+    width: 70px; padding: 8px; font-size: 16px;
+    border: 1.5px solid rgba(56,17,47,0.18); border-radius: 6px;
+  }
+  .box-fit-options { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 12px; }
+  .box-fit-card {
+    flex: 1; min-width: 200px; border: 1.5px solid rgba(56,17,47,0.12);
+    border-radius: 10px; padding: 14px 16px;
+  }
+  .box-fit-card h4 { margin: 0 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--plum-dark); }
+  .box-option-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; }
+  .box-option-row .box-size-big { font-size: 22px; font-weight: 700; margin-bottom: 2px; }
+  .box-option-row .box-meta { color: var(--ink-soft); font-size: 12.5px; }
+  .box-alt-details { margin-top: 10px; font-size: 13px; border-top: 1px solid rgba(56,17,47,0.08); padding-top: 8px; }
+  .box-alt-details summary { cursor: pointer; color: var(--plum-dark); font-weight: 600; margin-bottom: 4px; }
+  .box-alt-details .box-option-row { padding: 6px 0; border-bottom: 1px solid rgba(56,17,47,0.06); }
+  .box-alt-details .box-option-row .box-size-big { font-size: 17px; }
+  .box-inventory-details { margin-top: 18px; font-size: 13px; }
+  .box-inventory-details summary { cursor: pointer; color: var(--plum-dark); font-weight: 600; }
+  .box-inv-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid rgba(56,17,47,0.06); }
+  .box-inv-row.low { color: #B3261E; font-weight: 600; }
+
+  .stage-block { margin-bottom: 24px; }
+  .stage-block:last-child { margin-bottom: 0; }
+  .stage-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  .stage-num {
+    font-family: 'Days One', sans-serif;
+    font-size: 12px;
+    color: var(--paper);
+    background: var(--plum);
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .stage-title { font-size: 15px; font-weight: 700; color: var(--plum-dark); margin: 0; }
+
+  .stage-buttons { display: flex; gap: 10px; flex-wrap: wrap; }
+  .stage-btn {
+    background: var(--paper);
+    border: 1.5px solid rgba(56,17,47,0.16);
+    color: var(--plum-dark);
+  }
+  .stage-btn:hover:not(:disabled) {
+    background: var(--teal);
+    border-color: var(--teal);
+    color: white;
+  }
+
+  .shipped-result {
+    margin-top: 18px;
+    padding: 14px 16px;
+    background: rgba(59,192,198,0.08);
+    border-left: 3px solid var(--teal);
+    border-radius: 0 8px 8px 0;
+    font-size: 13.5px;
+    line-height: 1.6;
+  }
+  .shipped-result .note-warn { color: #b8762a; }
+  .shipped-result .note-muted { color: var(--ink-soft); }
+  .shipped-result .note-error { color: var(--coral-deep); }
+
+  .pl-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+  .pl-toolbar button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .pl-toolbar label {
+    display: flex; flex-direction: column; gap: 4px; font-size: 12px;
+    color: var(--ink-soft); font-weight: 600;
+  }
+  .pl-toolbar input[type=date] {
+    padding: 7px 8px; font-size: 13.5px;
+    border: 1.5px solid rgba(56,17,47,0.18); border-radius: 6px;
+    font-family: inherit;
+  }
+  .pl-status { font-size: 13px; color: var(--ink-soft); margin: 8px 0 0; }
+  table.pl-table { margin-top: 16px; }
+  table.pl-table th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-soft); }
+  .pl-badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; }
+  .pl-badge.local { background: #dff5e1; color: #1e6b34; }
+  .pl-badge.ship { background: #e7eefc; color: #1c4587; }
+  .pl-badge.partial { background: #fdf1d6; color: #93650c; margin-left: 4px; }
+  .pl-badge.not-arrived { background: #fbe1de; color: #a8321b; margin-left: 4px; }
+
+  .jump-nav {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: var(--plum-dark);
+    padding: 10px 24px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.18);
+  }
+  .jump-nav a {
+    color: var(--cream);
+    background: rgba(255,255,255,0.08);
+    text-decoration: none;
+    font-size: 12.5px;
+    font-weight: 600;
+    padding: 7px 13px;
+    border-radius: 20px;
+    white-space: nowrap;
+    transition: background 0.12s;
+  }
+  .jump-nav a:hover { background: var(--coral); }
+
+  .card { scroll-margin-top: 54px; }
+
+  .card-top-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .back-to-top {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ink-soft);
+    text-decoration: none;
+    white-space: nowrap;
+    flex-shrink: 0;
+    padding: 2px 0;
+  }
+  .back-to-top:hover { color: var(--coral); }
+</style>
+</head>
+<body>
+
+<div class="masthead" id="top">
+  <div class="masthead-inner">
+    <p class="eyebrow">Detective Hawk Games · Internal Tool</p>
+    <h1 class="title">Weekly Orders Tracker</h1>
+    <p>Upload supplier quotes and invoices to move products from <strong>Order placed</strong> to <strong>Shipped from supplier</strong> to <strong>Order received</strong> in the Weekly Orders sheet, tagging each Shopify order once every unit it needs has reached the next stage.</p>
+  </div>
+</div>
+
+<nav class="jump-nav">
+  <a href="#card-verify-quote">Verify Quote</a>
+  <a href="#card-asmodee-invoice">Asmodee Invoice</a>
+  <a href="#card-asmodee-arrived-invoice">Asmodee Arrived</a>
+  <a href="#card-ud-invoice">UD Invoice</a>
+  <a href="#card-ud-arrived-invoice">UD Arrived</a>
+  <a href="#card-acdd-invoice">ACDD Invoice</a>
+  <a href="#card-acdd-arrived-invoice">ACDD Arrived</a>
+  <a href="#card-box-size">Box Size</a>
+  <a href="#card-picking-lists">Picking Lists</a>
+  <a href="order-check.html">Order Check</a>
+</nav>
+
+<div class="page">
+
+  <div class="card" id="card-verify-quote">
+    <div class="card-top-row">
+      <p class="card-label"><span class="dot"></span>Pre-Shipment Check</p>
+      <a href="#top" class="back-to-top">↑ Top</a>
+    </div>
+    <h2 class="section-title">Verify Asmodee Quote</h2>
+    <p class="section-desc">Upload the Sales Quote your rep sends before anything ships, to catch a wrong SKU, wrong quantity, or missed item while it's still cheap to fix. This never changes anything — it only compares against the most recently locked Asmodee cycle (the Order placed, Shipped and Received tabs) and shows you the diff. It does <em>not</em> confirm shipment; that's the Invoice, below.</p>
+
+    <div class="upload-zone" id="dropZone">
+      <p>Drop the quote PDF here, or choose a file</p>
+      <input type="file" id="fileInput" accept="application/pdf">
+      <br>
+      <button id="uploadBtn" disabled>Check Against Latest Lock</button>
+    </div>
+
+    <div id="result"></div>
+  </div>
+
+  <div class="card" id="card-asmodee-invoice">
+    <div class="card-top-row">
+      <p class="card-label"><span class="dot"></span>Mark Shipped</p>
+      <a href="#top" class="back-to-top">↑ Top</a>
+    </div>
+    <h2 class="section-title">Upload Asmodee Invoice</h2>
+    <p class="section-desc">Upload the Sales Invoice Asmodee sends once your order actually ships (not the Quote — that's a submission confirmation, not proof of shipment). Matching units move from Order placed to Shipped from supplier, oldest locked cycle first, and any order whose every unit has now shipped is tagged. Check "Dry run" to preview without writing anything.</p>
+
+    <label class="dry-run-toggle"><input type="checkbox" id="asmInvDryRun"> Dry run (preview only, no writes)</label>
+
+    <div class="upload-zone" id="asmInvDropZone">
+      <p>Drop the invoice PDF here, or choose a file</p>
+      <input type="file" id="asmInvFileInput" accept="application/pdf">
+      <br>
+      <button id="asmInvUploadBtn" disabled>Mark Shipped From This Invoice</button>
+    </div>
+
+    <div id="asmInvResult"></div>
+  </div>
+
+  <div class="card" id="card-asmodee-arrived-invoice">
+    <div class="card-top-row">
+      <p class="card-label"><span class="dot"></span>Mark Arrived</p>
+      <a href="#top" class="back-to-top">↑ Top</a>
+    </div>
+    <h2 class="section-title">Upload Asmodee Arrival Invoice</h2>
+    <p class="section-desc">Upload the invoice confirming what physically arrived. Only units currently in Shipped from supplier move to Order received, matched against this invoice's line items by SKU — units awaiting a <em>different</em> invoice are left alone. Does not touch Shopify inventory. Check "Dry run" to preview the match without writing anything.</p>
+
+    <label class="dry-run-toggle"><input type="checkbox" id="asmArrivedDryRun" checked> Dry run (preview only, no writes)</label>
+
+    <div class="upload-zone" id="asmArrivedDropZone">
+      <p>Drop the invoice PDF here, or choose a file</p>
+      <input type="file" id="asmArrivedFileInput" accept="application/pdf">
+      <br>
+      <button id="asmArrivedUploadBtn" disabled>Mark Arrived From This Invoice</button>
+    </div>
+
+    <div id="asmArrivedResult"></div>
+  </div>
+
+  <div class="card" id="card-ud-invoice">
+    <div class="card-top-row">
+      <p class="card-label"><span class="dot"></span>Mark Shipped</p>
+      <a href="#top" class="back-to-top">↑ Top</a>
+    </div>
+    <h2 class="section-title">Upload Universal Dist Invoice(s)</h2>
+    <p class="section-desc">Upload the invoice(s) you received (primary + secondary warehouse, if applicable). Matching units move from Order placed to Shipped from supplier, oldest locked cycle first, and any order whose every unit has now shipped is tagged. Check "Dry run" to preview without writing anything. Matches by barcode, falling back to SKU when a barcode isn't mapped yet.</p>
+
+    <label class="dry-run-toggle"><input type="checkbox" id="udDryRun"> Dry run (preview only, no writes)</label>
+
+    <div class="upload-zone" id="udDropZone">
+      <p>Drop one or more invoice .xlsx files here, or choose files</p>
+      <input type="file" id="udFileInput" accept=".xlsx" multiple>
+      <br>
+      <button id="udUploadBtn" disabled>Mark Shipped From These Invoices</button>
+    </div>
+
+    <div id="udResult"></div>
+  </div>
+
+  <div class="card" id="card-ud-arrived-invoice">
+    <div class="card-top-row">
+      <p class="card-label"><span class="dot"></span>Mark Arrived</p>
+      <a href="#top" class="back-to-top">↑ Top</a>
+    </div>
+    <h2 class="section-title">Upload Universal Dist Arrival Invoice(s)</h2>
+    <p class="section-desc">Upload the invoice(s) confirming what physically arrived. Only units currently in Shipped from supplier move to Order received, matched against this invoice's line items (barcode, falling back to SKU) — units awaiting a <em>different</em> invoice are left alone. Does not touch Shopify inventory. Check "Dry run" to preview the match without writing anything.</p>
+
+    <label class="dry-run-toggle"><input type="checkbox" id="udArrivedDryRun" checked> Dry run (preview only, no writes)</label>
+
+    <div class="upload-zone" id="udArrivedDropZone">
+      <p>Drop one or more invoice .xlsx files here, or choose files</p>
+      <input type="file" id="udArrivedFileInput" accept=".xlsx" multiple>
+      <br>
+      <button id="udArrivedUploadBtn" disabled>Mark Arrived From These Invoices</button>
+    </div>
+
+    <div id="udArrivedResult"></div>
+  </div>
+
+  <div class="card" id="card-acdd-invoice">
+    <div class="card-top-row">
+      <p class="card-label"><span class="dot"></span>Mark Shipped</p>
+      <a href="#top" class="back-to-top">↑ Top</a>
+    </div>
+    <h2 class="section-title">Upload ACDD Invoice(s)</h2>
+    <p class="section-desc">Upload the ACD Distribution invoice PDF(s). Matching units move from <strong>Order placed</strong> to <strong>Shipped from supplier</strong>, oldest locked order first, and any order whose every unit has now shipped is tagged. Lines are matched by the UPC printed under each item (through the ACDD catalog), falling back to the product's Shopify barcode when a row has no ACDD SKU. Check "Dry run" to preview without writing anything.</p>
+
+    <label class="dry-run-toggle"><input type="checkbox" id="acddDryRun"> Dry run (preview only, no writes)</label>
+
+    <div class="upload-zone" id="acddDropZone">
+      <p>Drop one or more invoice PDFs here, or choose files</p>
+      <input type="file" id="acddFileInput" accept="application/pdf" multiple>
+      <br>
+      <button id="acddUploadBtn" disabled>Mark Shipped From These Invoices</button>
+    </div>
+
+    <div id="acddResult"></div>
+  </div>
+
+  <div class="card" id="card-acdd-arrived-invoice">
+    <div class="card-top-row">
+      <p class="card-label"><span class="dot"></span>Mark Arrived</p>
+      <a href="#top" class="back-to-top">↑ Top</a>
+    </div>
+    <h2 class="section-title">Upload ACDD Arrival Invoice(s)</h2>
+    <p class="section-desc">ACDD sends no separate arrival document, so upload the same invoice again once the box is physically here. Units currently in <strong>Shipped from supplier</strong> that the invoice covers move to <strong>Order received</strong>, and orders whose every unit has arrived are tagged. Units awaiting a <em>different</em> invoice are left alone. Check "Dry run" to preview without writing anything.</p>
+
+    <label class="dry-run-toggle"><input type="checkbox" id="acddArrivedDryRun" checked> Dry run (preview only, no writes)</label>
+
+    <div class="upload-zone" id="acddArrivedDropZone">
+      <p>Drop one or more invoice PDFs here, or choose files</p>
+      <input type="file" id="acddArrivedFileInput" accept="application/pdf" multiple>
+      <br>
+      <button id="acddArrivedUploadBtn" disabled>Mark Arrived From These Invoices</button>
+    </div>
+
+    <div id="acddArrivedResult"></div>
+  </div>
+
+  <div class="card" id="card-box-size">
+    <div class="card-top-row">
+      <p class="card-label"><span class="dot"></span>Packing</p>
+      <a href="#top" class="back-to-top">↑ Top</a>
+    </div>
+    <h2 class="section-title">Box Size Recommendation</h2>
+    <p class="section-desc">Measure the stacked pile of items for an order (combined length, width, height) and get the smallest box that fits. "Insured fit" leaves 2" of clearance on each side; "Tight fit" has none — your call on the risk tradeoff. Satchels only show up when something's genuinely flat.</p>
+
+    <div class="box-dims-row">
+      <label>L <input type="number" id="boxLength" min="0" step="0.5"></label>
+      <label>W <input type="number" id="boxWidth" min="0" step="0.5"></label>
+      <label>H <input type="number" id="boxHeight" min="0" step="0.5"></label>
+      <button id="boxRecommendBtn">Recommend Box</button>
+    </div>
+
+    <div id="boxResult"></div>
+
+    <details class="box-inventory-details">
+      <summary>View box inventory</summary>
+      <div id="boxInventoryList"><p class="loading">Loading...</p></div>
+    </details>
+  </div>
+
+  <div class="card" id="card-picking-lists">
+    <div class="card-top-row">
+      <p class="card-label"><span class="dot"></span>Pack &amp; Ship</p>
+      <a href="#top" class="back-to-top">↑ Top</a>
+    </div>
+    <h2 class="section-title">Picking Lists</h2>
+    <p class="section-desc">
+      Select the orders you're packing and generate a combined, printable PDF — one picking list per order,
+      with product thumbnails, quantities, and the shipping address. Replaces iPacky's picking-list export.
+    </p>
+
+    <div class="pl-toolbar">
+      <label>From <input type="date" id="plSinceInput"></label>
+      <label>To <input type="date" id="plUntilInput"></label>
+      <button id="plApplyFilterBtn">Apply filter</button>
+      <span style="color: var(--ink-soft); font-size: 12.5px;">|</span>
+      <button id="plReadyToPackBtn">Ready to pack</button>
+      <span style="color: var(--ink-soft); font-size: 12.5px;">|</span>
+      <button id="plRefreshBtn">Refresh</button>
+      <button id="plSelectAllBtn">Select all</button>
+      <button id="plClearBtn">Clear selection</button>
+      <button id="plGenerateBtn" disabled>Generate PDF (0 selected)</button>
+    </div>
+    <p class="pl-status" id="plFilterStatus">Click "Ready to pack" to load orders tagged Order Received that are still unfulfilled or partial, or "Refresh" to load unfulfilled orders (most recent 25, or set a date range first).</p>
+
+    <div id="plResult"></div>
+  </div>
+
+</div>
+
+<script>
+const fileInput = document.getElementById('fileInput');
+const uploadBtn = document.getElementById('uploadBtn');
+const dropZone = document.getElementById('dropZone');
+const resultDiv = document.getElementById('result');
+
+let selectedFile = null;
+
+fileInput.addEventListener('change', (e) => {
+  selectedFile = e.target.files[0];
+  uploadBtn.disabled = !selectedFile;
+});
+
+dropZone.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  dropZone.classList.add('dragover');
+});
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  if (e.dataTransfer.files.length) {
+    selectedFile = e.dataTransfer.files[0];
+    uploadBtn.disabled = false;
+  }
+});
+
+function statusClass(status) {
+  if (status === 'Match') return 'status-match';
+  if (status.includes('More than')) return 'status-more';
+  if (status.includes('Less than')) return 'status-less';
+  if (status.includes('Missing')) return 'status-missing';
+  if (status.includes('Pre-Order')) return 'status-preorder';
+  if (status.includes('not submitted')) return 'status-unexpected';
+  return '';
+}
+
+uploadBtn.addEventListener('click', async () => {
+  if (!selectedFile) return;
+
+  uploadBtn.disabled = true;
+  resultDiv.innerHTML = '<p class="loading">Parsing quote and comparing against the latest locked Asmodee order...</p>';
+
+  const formData = new FormData();
+  formData.append('file', selectedFile);
+
+  try {
+    const res = await fetch('/api/verify-asmodee-quote', { method: 'POST', body: formData });
+    const data = await res.json();
+
+    if (!res.ok || data.error) {
+      resultDiv.innerHTML = `<div class="error">Error: ${data.error || 'Unknown error'}</div>`;
+      uploadBtn.disabled = false;
+      return;
+    }
+
+    if (data.warning) {
+      resultDiv.innerHTML = `<div class="error">${data.warning}</div>`;
+      uploadBtn.disabled = false;
+      return;
+    }
+
+    let html = `<div class="summary">
+      <div class="stat"><strong>${data.itemsInQuote}</strong><span>in quote</span></div>
+      <div class="stat"><strong>${data.skusLocked}</strong><span>locked</span></div>
+      <div class="stat"><strong>${data.mismatchCount}</strong><span>mismatch${data.mismatchCount === 1 ? '' : 'es'}</span></div>
+    </div>`;
+
+    if (data.clean) {
+      html += `<p class="footnote">Everything on the quote matches what was locked under <strong>${data.comparedAgainstSupplierOrderId}</strong>. Safe to approve.</p>`;
+    } else {
+      html += '<table><thead><tr><th>SKU</th><th>Issue</th><th>Locked Qty</th><th>Quoted Qty</th><th>Order(s)</th></tr></thead><tbody>';
+      for (const m of data.mismatches) {
+        html += `<tr>
+          <td>${m.sku}</td>
+          <td class="status-missing">${m.issue}</td>
+          <td>${m.lockedQty}</td>
+          <td>${m.quotedQty}</td>
+          <td>${m.orderNames || '—'}</td>
+        </tr>`;
+      }
+      html += '</tbody></table>';
+      html += `<p class="footnote">Compared against Supplier Order ID <strong>${data.comparedAgainstSupplierOrderId}</strong>.</p>`;
+    }
+
+    resultDiv.innerHTML = html;
+  } catch (err) {
+    resultDiv.innerHTML = `<div class="error">Request failed: ${err.message}</div>`;
+  }
+
+  uploadBtn.disabled = false;
+});
+
+const asmInvFileInput = document.getElementById('asmInvFileInput');
+const asmInvUploadBtn = document.getElementById('asmInvUploadBtn');
+const asmInvDropZone = document.getElementById('asmInvDropZone');
+const asmInvResultDiv = document.getElementById('asmInvResult');
+
+let asmInvSelectedFile = null;
+
+asmInvFileInput.addEventListener('change', (e) => {
+  asmInvSelectedFile = e.target.files[0];
+  asmInvUploadBtn.disabled = !asmInvSelectedFile;
+});
+asmInvDropZone.addEventListener('dragover', (e) => { e.preventDefault(); asmInvDropZone.classList.add('dragover'); });
+asmInvDropZone.addEventListener('dragleave', () => asmInvDropZone.classList.remove('dragover'));
+asmInvDropZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  asmInvDropZone.classList.remove('dragover');
+  if (e.dataTransfer.files.length) {
+    asmInvSelectedFile = e.dataTransfer.files[0];
+    asmInvUploadBtn.disabled = false;
+  }
+});
+
+asmInvUploadBtn.addEventListener('click', async () => {
+  if (!asmInvSelectedFile) return;
+  asmInvUploadBtn.disabled = true;
+  asmInvResultDiv.innerHTML = '<p class="loading">Parsing invoice and advancing matched units to Shipped...</p>';
+
+  const formData = new FormData();
+  formData.append('file', asmInvSelectedFile);
+  formData.append('dry_run', document.getElementById('asmInvDryRun').checked ? 'true' : 'false');
+
+  try {
+    const res = await fetch('/api/reconcile', { method: 'POST', body: formData });
+    const data = await res.json();
+
+    if (!res.ok || data.error) {
+      asmInvResultDiv.innerHTML = `<div class="error">Error: ${data.error || 'Unknown error'}</div>`;
+      asmInvUploadBtn.disabled = false;
+      return;
+    }
+
+    let html = `<div class="summary">
+      <div class="stat"><strong>${data.itemsInQuote}</strong><span>in invoice</span></div>
+      <div class="stat"><strong>${data.unitsAdvancedToShipped}</strong><span>units advanced</span></div>
+      <div class="stat"><strong>${data.ordersFullyShippedAndTagged.length}</strong><span>orders fully shipped</span></div>
+    </div>`;
+
+    if (data.inventoryReceived) {
+      const inv = data.inventoryReceived;
+      html += `<div class="summary">
+        <div class="stat"><strong>${inv.unitsPosted}</strong><span>units added to inventory</span></div>
+        <div class="stat"><strong>${inv.skusPosted}</strong><span>SKUs posted</span></div>
+      </div>`;
+      if (inv.skippedNoInventoryItem && inv.skippedNoInventoryItem.length) {
+        html += `<p class="footnote">No matching Shopify variant, inventory NOT posted for: ${inv.skippedNoInventoryItem.join(', ')}</p>`;
+      }
+      if (inv.userErrors && inv.userErrors.length) {
+        html += `<p class="footnote" style="color:#b3392b">Inventory posting errors: ${inv.userErrors.map(e => e.message).join('; ')}</p>`;
+      }
+    }
+
+    const onInvoice = data.results.filter(r => r[3] > 0);
+    const notOnInvoice = data.results.filter(r => r[3] === 0);
+
+    html += renderInvoiceTable(onInvoice);
+    if (notOnInvoice.length) {
+      html += `<details class="not-on-invoice"><summary>${notOnInvoice.length} other item(s) still on order, not on this invoice</summary>`;
+      html += renderInvoiceTable(notOnInvoice);
+      html += `</details>`;
+    }
+
+    if (data.ordersFullyShippedAndTagged.length) {
+      html += `<p class="footnote">Tagged as fully shipped: ${data.ordersFullyShippedAndTagged.join(', ')}</p>`;
+    }
+    if (data.skippedAlreadyInventoryQueued.length) {
+      html += `<p class="footnote">Already inventory-queued, left untouched: ${data.skippedAlreadyInventoryQueued.join(', ')}</p>`;
+    }
+
+    asmInvResultDiv.innerHTML = shippedExtras(data) + html;
+  } catch (err) {
+    asmInvResultDiv.innerHTML = `<div class="error">Request failed: ${err.message}</div>`;
+  }
+
+  asmInvUploadBtn.disabled = false;
+});
+
+function shippedExtras(data) {
+  let h = '';
+  if (data.dryRun) h += '<p class="footnote" style="font-weight:600">DRY RUN — nothing below has been written yet.</p>';
+  if (data.dryRun && data.ordersThatWouldBeTagged && data.ordersThatWouldBeTagged.length) {
+    h += `<p class="footnote">Would tag as fully shipped: ${data.ordersThatWouldBeTagged.join(', ')}</p>`;
+  }
+  if (data.tagErrors && data.tagErrors.length) {
+    h += `<p class="footnote" style="color:#b3392b">Tagging problems (sheets were still updated): ${data.tagErrors.map(e => `${e.order}: ${e.error}`).join('; ')}</p>`;
+  }
+  if (data.note) h += `<p class="footnote">${data.note}</p>`;
+  return h;
+}
+
+function renderInvoiceTable(rows) {
+  if (!rows.length) return '<p class="footnote">Nothing here.</p>';
+  let html = '<table><thead><tr><th>SKU</th><th>Title</th><th>Ordered</th><th>Invoice Qty</th><th>Status</th><th>Order(s)</th></tr></thead><tbody>';
+  for (const row of rows) {
+    const [sku, title, ordered, invQty, status, orderNames] = row;
+    html += `<tr>
+      <td>${sku}</td><td>${title}</td><td>${ordered}</td><td>${invQty}</td>
+      <td class="${statusClass(status)}">${status}</td><td>${orderNames || '—'}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  return html;
+}
+
+function renderUdInvoiceTable(rows) {
+  if (!rows.length) return '<p class="footnote">Nothing here.</p>';
+  let html = '<table><thead><tr><th>SKU</th><th>Barcode</th><th>Title</th><th>Ordered</th><th>Invoice Qty</th><th>Status</th><th>Order(s)</th></tr></thead><tbody>';
+  for (const row of rows) {
+    const [sku, barcode, title, ordered, invQty, status, orderNames] = row;
+    html += `<tr>
+      <td>${sku}</td><td>${barcode}</td><td>${title}</td><td>${ordered}</td><td>${invQty}</td>
+      <td class="${udStatusClass(status)}">${status}</td><td>${orderNames || '—'}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  return html;
+}
+
+const udFileInput = document.getElementById('udFileInput');
+const udUploadBtn = document.getElementById('udUploadBtn');
+const udDropZone = document.getElementById('udDropZone');
+const udResultDiv = document.getElementById('udResult');
+
+let udSelectedFiles = [];
+
+udFileInput.addEventListener('change', (e) => {
+  udSelectedFiles = Array.from(e.target.files);
+  udUploadBtn.disabled = udSelectedFiles.length === 0;
+});
+
+udDropZone.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  udDropZone.classList.add('dragover');
+});
+udDropZone.addEventListener('dragleave', () => udDropZone.classList.remove('dragover'));
+udDropZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  udDropZone.classList.remove('dragover');
+  if (e.dataTransfer.files.length) {
+    udSelectedFiles = Array.from(e.dataTransfer.files);
+    udUploadBtn.disabled = false;
+  }
+});
+
+function udStatusClass(status) {
+  if (status === 'Match') return 'status-match';
+  if (status.includes('More than')) return 'status-more';
+  if (status.includes('Less than')) return 'status-less';
+  if (status.includes('Missing')) return 'status-missing';
+  if (status.includes('Pre-Order')) return 'status-preorder';
+  if (status.includes('not submitted')) return 'status-unexpected';
+  return '';
+}
+
+udUploadBtn.addEventListener('click', async () => {
+  if (!udSelectedFiles.length) return;
+
+  udUploadBtn.disabled = true;
+  udResultDiv.innerHTML = '<p class="loading">Parsing invoice(s) and advancing matched units to Shipped...</p>';
+
+  const formData = new FormData();
+  for (const f of udSelectedFiles) formData.append('file', f);
+  formData.append('dry_run', document.getElementById('udDryRun').checked ? 'true' : 'false');
+
+  try {
+    const res = await fetch('/api/reconcile-ud', { method: 'POST', body: formData });
+    const data = await res.json();
+
+    if (!res.ok || data.error) {
+      udResultDiv.innerHTML = `<div class="error">Error: ${data.error || 'Unknown error'}</div>`;
+      udUploadBtn.disabled = false;
+      return;
+    }
+
+    let html = `<div class="summary">
+      <div class="stat"><strong>${data.itemsInInvoices}</strong><span>in invoice(s)</span></div>
+      <div class="stat"><strong>${data.unitsAdvancedToShipped}</strong><span>units advanced</span></div>
+      <div class="stat"><strong>${data.ordersFullyShippedAndTagged.length}</strong><span>orders fully shipped</span></div>
+    </div>`;
+
+    if (data.inventoryReceived) {
+      const inv = data.inventoryReceived;
+      html += `<div class="summary">
+        <div class="stat"><strong>${inv.unitsPosted}</strong><span>units added to inventory</span></div>
+        <div class="stat"><strong>${inv.skusPosted}</strong><span>SKUs posted</span></div>
+      </div>`;
+      if (inv.skippedNoInventoryItem && inv.skippedNoInventoryItem.length) {
+        html += `<p class="footnote">No matching Shopify variant, inventory NOT posted for: ${inv.skippedNoInventoryItem.join(', ')}</p>`;
+      }
+      if (inv.userErrors && inv.userErrors.length) {
+        html += `<p class="footnote" style="color:#b3392b">Inventory posting errors: ${inv.userErrors.map(e => e.message).join('; ')}</p>`;
+      }
+    }
+
+    const onInvoice = data.results.filter(r => r[4] > 0);
+    const notOnInvoice = data.results.filter(r => r[4] === 0);
+
+    html += renderUdInvoiceTable(onInvoice);
+    if (notOnInvoice.length) {
+      html += `<details class="not-on-invoice"><summary>${notOnInvoice.length} other item(s) still on order, not on this invoice</summary>`;
+      html += renderUdInvoiceTable(notOnInvoice);
+      html += `</details>`;
+    }
+
+    html += `<p class="footnote">Parsed ${data.invoicesParsed.map(f => `${f.filename} (${f.lineItems} items)`).join(', ')}.</p>`;
+    if (data.ordersFullyShippedAndTagged.length) {
+      html += `<p class="footnote">Tagged as fully shipped: ${data.ordersFullyShippedAndTagged.join(', ')}</p>`;
+    }
+    if (data.skippedAlreadyInventoryQueued.length) {
+      html += `<p class="footnote">Already inventory-queued, left untouched: ${data.skippedAlreadyInventoryQueued.join(', ')}</p>`;
+    }
+
+    udResultDiv.innerHTML = shippedExtras(data) + html;
+  } catch (err) {
+    udResultDiv.innerHTML = `<div class="error">Request failed: ${err.message}</div>`;
+  }
+
+  udUploadBtn.disabled = false;
+});
+
+// ── UD Arrived Invoice Upload ────────────────────────────────────────────────
+// ── Asmodee Arrived Invoice Upload ──────────────────────────────────────────
+function renderAsmArrivedTable(rows) {
+  if (!rows.length) return '<p class="footnote">Nothing here.</p>';
+  let html = '<table><thead><tr><th>SKU</th><th>Title</th><th>Awaiting Arrival</th><th>Invoice Qty</th><th>Status</th><th>Order(s)</th></tr></thead><tbody>';
+  for (const row of rows) {
+    const [sku, title, awaiting, invQty, status, orderNames] = row;
+    html += `<tr>
+      <td>${sku}</td><td>${title}</td><td>${awaiting}</td><td>${invQty}</td>
+      <td class="${statusClass(status)}">${status}</td><td>${orderNames || '—'}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  return html;
+}
+
+const asmArrivedFileInput = document.getElementById('asmArrivedFileInput');
+const asmArrivedUploadBtn = document.getElementById('asmArrivedUploadBtn');
+const asmArrivedDropZone = document.getElementById('asmArrivedDropZone');
+const asmArrivedResultDiv = document.getElementById('asmArrivedResult');
+const asmArrivedDryRun = document.getElementById('asmArrivedDryRun');
+
+let asmArrivedSelectedFile = null;
+
+asmArrivedFileInput.addEventListener('change', (e) => {
+  asmArrivedSelectedFile = e.target.files[0];
+  asmArrivedUploadBtn.disabled = !asmArrivedSelectedFile;
+});
+asmArrivedDropZone.addEventListener('dragover', (e) => { e.preventDefault(); asmArrivedDropZone.classList.add('dragover'); });
+asmArrivedDropZone.addEventListener('dragleave', () => asmArrivedDropZone.classList.remove('dragover'));
+asmArrivedDropZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  asmArrivedDropZone.classList.remove('dragover');
+  if (e.dataTransfer.files.length) {
+    asmArrivedSelectedFile = e.dataTransfer.files[0];
+    asmArrivedUploadBtn.disabled = false;
+  }
+});
+
+asmArrivedUploadBtn.addEventListener('click', async () => {
+  if (!asmArrivedSelectedFile) return;
+
+  const dryRun = asmArrivedDryRun.checked;
+  asmArrivedUploadBtn.disabled = true;
+  asmArrivedResultDiv.innerHTML = `<p class="loading">${dryRun ? 'Previewing' : 'Parsing invoice and advancing'} matched units ${dryRun ? '' : 'to Arrived '}...</p>`;
+
+  const formData = new FormData();
+  formData.append('file', asmArrivedSelectedFile);
+  formData.append('dry_run', dryRun ? 'true' : 'false');
+
+  try {
+    const res = await fetch('/api/reconcile-arrived-asmodee', { method: 'POST', body: formData });
+    const data = await res.json();
+
+    if (!res.ok || data.error) {
+      asmArrivedResultDiv.innerHTML = `<div class="error">Error: ${data.error || 'Unknown error'}</div>`;
+      asmArrivedUploadBtn.disabled = false;
+      return;
+    }
+
+    const unitsKey = dryRun ? 'unitsThatWouldAdvanceToArrived' : 'unitsAdvancedToArrived';
+    const ordersKey = dryRun ? 'ordersThatWouldBeFullyArrivedAndTagged' : 'ordersFullyArrivedAndTagged';
+
+    let html = '';
+    if (dryRun) {
+      html += `<p class="footnote" style="font-weight:600">DRY RUN — nothing below has been written yet.</p>`;
+    }
+    html += `<div class="summary">
+      <div class="stat"><strong>${data.itemsInInvoice}</strong><span>in invoice</span></div>
+      <div class="stat"><strong>${data[unitsKey]}</strong><span>units ${dryRun ? 'would advance' : 'advanced'}</span></div>
+      <div class="stat"><strong>${data[ordersKey].length}</strong><span>orders fully arrived</span></div>
+    </div>`;
+
+    const onInvoice = data.results.filter(r => r[3] > 0);
+    const notOnInvoice = data.results.filter(r => r[3] === 0);
+
+    html += renderAsmArrivedTable(onInvoice);
+    if (notOnInvoice.length) {
+      html += `<details class="not-on-invoice"><summary>${notOnInvoice.length} other item(s) still awaiting arrival, not on this invoice</summary>`;
+      html += renderAsmArrivedTable(notOnInvoice);
+      html += `</details>`;
+    }
+
+    if (data[ordersKey].length) {
+      const label = dryRun
+        ? data[ordersKey].map(t => `${t.order} (would apply ${t.wouldApply})`).join(', ')
+        : data[ordersKey].map(t => `${t.order} (${t.tag})`).join(', ');
+      html += `<p class="footnote">${dryRun ? 'Would tag' : 'Tagged'} as fully arrived: ${label}</p>`;
+    }
+    if (data.skippedAlreadyInventoryQueued.length) {
+      html += `<p class="footnote">Already inventory-queued, left untouched: ${data.skippedAlreadyInventoryQueued.join(', ')}</p>`;
+    }
+    if (data.blockedByCancellationOrRefund && data.blockedByCancellationOrRefund.length) {
+      html += `<p class="footnote" style="color:#b3392b">Blocked by cancellation/refund mismatch, needs manual review: ${data.blockedByCancellationOrRefund.map(b => `${b.order} (${b.sku})`).join(', ')}</p>`;
+    }
+    if (data.removedFulfilledOrCancelled && data.removedFulfilledOrCancelled.length) {
+      html += `<p class="footnote">Already Fulfilled or Cancelled in Shopify, not tagged: ${data.removedFulfilledOrCancelled.join(', ')}</p>`;
+    }
+    html += `<p class="footnote">${data.note}</p>`;
+
+    asmArrivedResultDiv.innerHTML = html;
+  } catch (err) {
+    asmArrivedResultDiv.innerHTML = `<div class="error">Request failed: ${err.message}</div>`;
+  }
+
+  asmArrivedUploadBtn.disabled = false;
+});
+
+function renderUdArrivedTable(rows) {
+  if (!rows.length) return '<p class="footnote">Nothing here.</p>';
+  let html = '<table><thead><tr><th>SKU</th><th>Barcode</th><th>Title</th><th>Awaiting Arrival</th><th>Invoice Qty</th><th>Status</th><th>Order(s)</th></tr></thead><tbody>';
+  for (const row of rows) {
+    const [sku, barcode, title, awaiting, invQty, status, orderNames] = row;
+    html += `<tr>
+      <td>${sku}</td><td>${barcode}</td><td>${title}</td><td>${awaiting}</td><td>${invQty}</td>
+      <td class="${udStatusClass(status)}">${status}</td><td>${orderNames || '—'}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  return html;
+}
+
+const udArrivedFileInput = document.getElementById('udArrivedFileInput');
+const udArrivedUploadBtn = document.getElementById('udArrivedUploadBtn');
+const udArrivedDropZone = document.getElementById('udArrivedDropZone');
+const udArrivedResultDiv = document.getElementById('udArrivedResult');
+const udArrivedDryRun = document.getElementById('udArrivedDryRun');
+
+let udArrivedSelectedFiles = [];
+
+udArrivedFileInput.addEventListener('change', (e) => {
+  udArrivedSelectedFiles = Array.from(e.target.files);
+  udArrivedUploadBtn.disabled = udArrivedSelectedFiles.length === 0;
+});
+
+udArrivedDropZone.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  udArrivedDropZone.classList.add('dragover');
+});
+udArrivedDropZone.addEventListener('dragleave', () => udArrivedDropZone.classList.remove('dragover'));
+udArrivedDropZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  udArrivedDropZone.classList.remove('dragover');
+  if (e.dataTransfer.files.length) {
+    udArrivedSelectedFiles = Array.from(e.dataTransfer.files);
+    udArrivedUploadBtn.disabled = false;
+  }
+});
+
+udArrivedUploadBtn.addEventListener('click', async () => {
+  if (!udArrivedSelectedFiles.length) return;
+
+  const dryRun = udArrivedDryRun.checked;
+  udArrivedUploadBtn.disabled = true;
+  udArrivedResultDiv.innerHTML = `<p class="loading">${dryRun ? 'Previewing' : 'Parsing invoice(s) and advancing'} matched units ${dryRun ? '' : 'to Arrived '}...</p>`;
+
+  const formData = new FormData();
+  for (const f of udArrivedSelectedFiles) formData.append('file', f);
+  formData.append('dry_run', dryRun ? 'true' : 'false');
+
+  try {
+    const res = await fetch('/api/reconcile-arrived-ud', { method: 'POST', body: formData });
+    const data = await res.json();
+
+    if (!res.ok || data.error) {
+      udArrivedResultDiv.innerHTML = `<div class="error">Error: ${data.error || 'Unknown error'}</div>`;
+      udArrivedUploadBtn.disabled = false;
+      return;
+    }
+
+    const unitsKey = dryRun ? 'unitsThatWouldAdvanceToArrived' : 'unitsAdvancedToArrived';
+    const ordersKey = dryRun ? 'ordersThatWouldBeFullyArrivedAndTagged' : 'ordersFullyArrivedAndTagged';
+
+    let html = '';
+    if (dryRun) {
+      html += `<p class="footnote" style="font-weight:600">DRY RUN — nothing below has been written yet.</p>`;
+    }
+    html += `<div class="summary">
+      <div class="stat"><strong>${data.itemsInInvoices}</strong><span>in invoice(s)</span></div>
+      <div class="stat"><strong>${data[unitsKey]}</strong><span>units ${dryRun ? 'would advance' : 'advanced'}</span></div>
+      <div class="stat"><strong>${data[ordersKey].length}</strong><span>orders fully arrived</span></div>
+    </div>`;
+
+    const onInvoice = data.results.filter(r => r[4] > 0);
+    const notOnInvoice = data.results.filter(r => r[4] === 0);
+
+    html += renderUdArrivedTable(onInvoice);
+    if (notOnInvoice.length) {
+      html += `<details class="not-on-invoice"><summary>${notOnInvoice.length} other item(s) still awaiting arrival, not on this invoice</summary>`;
+      html += renderUdArrivedTable(notOnInvoice);
+      html += `</details>`;
+    }
+
+    html += `<p class="footnote">Parsed ${data.invoicesParsed.map(f => `${f.filename} (${f.lineItems} items)`).join(', ')}.</p>`;
+    if (data[ordersKey].length) {
+      const label = dryRun
+        ? data[ordersKey].map(t => `${t.order} (would apply ${t.wouldApply})`).join(', ')
+        : data[ordersKey].map(t => `${t.order} (${t.tag})`).join(', ');
+      html += `<p class="footnote">${dryRun ? 'Would tag' : 'Tagged'} as fully arrived: ${label}</p>`;
+    }
+    if (data.skippedAlreadyInventoryQueued.length) {
+      html += `<p class="footnote">Already inventory-queued, left untouched: ${data.skippedAlreadyInventoryQueued.join(', ')}</p>`;
+    }
+    if (data.blockedByCancellationOrRefund && data.blockedByCancellationOrRefund.length) {
+      html += `<p class="footnote" style="color:#b3392b">Blocked by cancellation/refund mismatch, needs manual review: ${data.blockedByCancellationOrRefund.map(b => `${b.order} (${b.sku})`).join(', ')}</p>`;
+    }
+    if (data.removedFulfilledOrCancelled && data.removedFulfilledOrCancelled.length) {
+      html += `<p class="footnote">Already Fulfilled or Cancelled in Shopify, not tagged: ${data.removedFulfilledOrCancelled.join(', ')}</p>`;
+    }
+    html += `<p class="footnote">${data.note}</p>`;
+
+    udArrivedResultDiv.innerHTML = html;
+  } catch (err) {
+    udArrivedResultDiv.innerHTML = `<div class="error">Request failed: ${err.message}</div>`;
+  }
+
+  udArrivedUploadBtn.disabled = false;
+});
+
+const acddFileInput = document.getElementById('acddFileInput');
+const acddUploadBtn = document.getElementById('acddUploadBtn');
+const acddDropZone = document.getElementById('acddDropZone');
+const acddResultDiv = document.getElementById('acddResult');
+
+let acddSelectedFiles = [];
+
+acddFileInput.addEventListener('change', (e) => {
+  acddSelectedFiles = Array.from(e.target.files);
+  acddUploadBtn.disabled = acddSelectedFiles.length === 0;
+});
+
+acddDropZone.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  acddDropZone.classList.add('dragover');
+});
+acddDropZone.addEventListener('dragleave', () => acddDropZone.classList.remove('dragover'));
+acddDropZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  acddDropZone.classList.remove('dragover');
+  if (e.dataTransfer.files.length) {
+    acddSelectedFiles = Array.from(e.dataTransfer.files);
+    acddUploadBtn.disabled = false;
+  }
+});
+
+function udStatusClass(status) {
+  if (status === 'Match') return 'status-match';
+  if (status.includes('More than')) return 'status-more';
+  if (status.includes('Less than')) return 'status-less';
+  if (status.includes('Missing')) return 'status-missing';
+  if (status.includes('Pre-Order')) return 'status-preorder';
+  if (status.includes('not submitted')) return 'status-unexpected';
+  return '';
+}
+
+acddUploadBtn.addEventListener('click', async () => {
+  if (!acddSelectedFiles.length) return;
+
+  acddUploadBtn.disabled = true;
+  acddResultDiv.innerHTML = '<p class="loading">Parsing invoice(s) and advancing matched units to Shipped...</p>';
+
+  const formData = new FormData();
+  for (const f of acddSelectedFiles) formData.append('file', f);
+  formData.append('dry_run', document.getElementById('acddDryRun').checked ? 'true' : 'false');
+
+  try {
+    const res = await fetch('/api/reconcile-acdd', { method: 'POST', body: formData });
+    const data = await res.json();
+
+    if (!res.ok || data.error) {
+      acddResultDiv.innerHTML = `<div class="error">Error: ${data.error || 'Unknown error'}</div>`;
+      acddUploadBtn.disabled = false;
+      return;
+    }
+
+    let html = `<div class="summary">
+      <div class="stat"><strong>${data.itemsInInvoices}</strong><span>in invoice(s)</span></div>
+      <div class="stat"><strong>${data.unitsAdvancedToShipped}</strong><span>units advanced</span></div>
+      <div class="stat"><strong>${data.ordersFullyShippedAndTagged.length}</strong><span>orders fully shipped</span></div>
+    </div>`;
+
+    if (data.inventoryReceived) {
+      const inv = data.inventoryReceived;
+      html += `<div class="summary">
+        <div class="stat"><strong>${inv.unitsPosted}</strong><span>units added to inventory</span></div>
+        <div class="stat"><strong>${inv.skusPosted}</strong><span>SKUs posted</span></div>
+      </div>`;
+      if (inv.skippedNoInventoryItem && inv.skippedNoInventoryItem.length) {
+        html += `<p class="footnote">No matching Shopify variant, inventory NOT posted for: ${inv.skippedNoInventoryItem.join(', ')}</p>`;
+      }
+      if (inv.userErrors && inv.userErrors.length) {
+        html += `<p class="footnote" style="color:#b3392b">Inventory posting errors: ${inv.userErrors.map(e => e.message).join('; ')}</p>`;
+      }
+    }
+
+    const onInvoice = data.results.filter(r => r[4] > 0);
+    const notOnInvoice = data.results.filter(r => r[4] === 0);
+
+    html += renderUdInvoiceTable(onInvoice);
+    if (notOnInvoice.length) {
+      html += `<details class="not-on-invoice"><summary>${notOnInvoice.length} other item(s) still on order, not on this invoice</summary>`;
+      html += renderUdInvoiceTable(notOnInvoice);
+      html += `</details>`;
+    }
+
+    html += `<p class="footnote">Parsed ${data.invoicesParsed.map(f => `${f.filename} (${f.lineItems} items)`).join(', ')}.</p>`;
+    if (data.ordersFullyShippedAndTagged.length) {
+      html += `<p class="footnote">Tagged as fully shipped: ${data.ordersFullyShippedAndTagged.join(', ')}</p>`;
+    }
+    if (data.skippedAlreadyInventoryQueued.length) {
+      html += `<p class="footnote">Already inventory-queued, left untouched: ${data.skippedAlreadyInventoryQueued.join(', ')}</p>`;
+    }
+
+    acddResultDiv.innerHTML = shippedExtras(data) + html;
+  } catch (err) {
+    acddResultDiv.innerHTML = `<div class="error">Request failed: ${err.message}</div>`;
+  }
+
+  acddUploadBtn.disabled = false;
+});
+
+
+const acddArrivedFileInput = document.getElementById('acddArrivedFileInput');
+const acddArrivedUploadBtn = document.getElementById('acddArrivedUploadBtn');
+const acddArrivedDropZone = document.getElementById('acddArrivedDropZone');
+const acddArrivedResultDiv = document.getElementById('acddArrivedResult');
+const acddArrivedDryRun = document.getElementById('acddArrivedDryRun');
+
+let acddArrivedSelectedFiles = [];
+
+acddArrivedFileInput.addEventListener('change', (e) => {
+  acddArrivedSelectedFiles = Array.from(e.target.files);
+  acddArrivedUploadBtn.disabled = acddArrivedSelectedFiles.length === 0;
+});
+
+acddArrivedDropZone.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  acddArrivedDropZone.classList.add('dragover');
+});
+acddArrivedDropZone.addEventListener('dragleave', () => acddArrivedDropZone.classList.remove('dragover'));
+acddArrivedDropZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  acddArrivedDropZone.classList.remove('dragover');
+  if (e.dataTransfer.files.length) {
+    acddArrivedSelectedFiles = Array.from(e.dataTransfer.files);
+    acddArrivedUploadBtn.disabled = false;
+  }
+});
+
+acddArrivedUploadBtn.addEventListener('click', async () => {
+  if (!acddArrivedSelectedFiles.length) return;
+
+  const dryRun = acddArrivedDryRun.checked;
+  acddArrivedUploadBtn.disabled = true;
+  acddArrivedResultDiv.innerHTML = `<p class="loading">${dryRun ? 'Previewing' : 'Parsing invoice(s) and advancing'} matched units ${dryRun ? '' : 'to Arrived '}...</p>`;
+
+  const formData = new FormData();
+  for (const f of acddArrivedSelectedFiles) formData.append('file', f);
+  formData.append('dry_run', dryRun ? 'true' : 'false');
+
+  try {
+    const res = await fetch('/api/reconcile-arrived-acdd', { method: 'POST', body: formData });
+    const data = await res.json();
+
+    if (!res.ok || data.error) {
+      acddArrivedResultDiv.innerHTML = `<div class="error">Error: ${data.error || 'Unknown error'}</div>`;
+      acddArrivedUploadBtn.disabled = false;
+      return;
+    }
+
+    const unitsKey = dryRun ? 'unitsThatWouldAdvanceToArrived' : 'unitsAdvancedToArrived';
+    const ordersKey = dryRun ? 'ordersThatWouldBeFullyArrivedAndTagged' : 'ordersFullyArrivedAndTagged';
+
+    let html = '';
+    if (dryRun) {
+      html += `<p class="footnote" style="font-weight:600">DRY RUN — nothing below has been written yet.</p>`;
+    }
+    html += `<div class="summary">
+      <div class="stat"><strong>${data.itemsInInvoices}</strong><span>in invoice(s)</span></div>
+      <div class="stat"><strong>${data[unitsKey]}</strong><span>units ${dryRun ? 'would advance' : 'advanced'}</span></div>
+      <div class="stat"><strong>${data[ordersKey].length}</strong><span>orders fully arrived</span></div>
+    </div>`;
+
+    const onInvoice = data.results.filter(r => r[4] > 0);
+    const notOnInvoice = data.results.filter(r => r[4] === 0);
+
+    html += renderUdArrivedTable(onInvoice);
+    if (notOnInvoice.length) {
+      html += `<details class="not-on-invoice"><summary>${notOnInvoice.length} other item(s) still awaiting arrival, not on this invoice</summary>`;
+      html += renderUdArrivedTable(notOnInvoice);
+      html += `</details>`;
+    }
+
+    html += `<p class="footnote">Parsed ${data.invoicesParsed.map(f => `${f.filename} (${f.lineItems} items)`).join(', ')}.</p>`;
+    if (data[ordersKey].length) {
+      const label = dryRun
+        ? data[ordersKey].map(t => `${t.order} (would apply ${t.wouldApply})`).join(', ')
+        : data[ordersKey].map(t => `${t.order} (${t.tag})`).join(', ');
+      html += `<p class="footnote">${dryRun ? 'Would tag' : 'Tagged'} as fully arrived: ${label}</p>`;
+    }
+    if (data.skippedAlreadyInventoryQueued.length) {
+      html += `<p class="footnote">Already inventory-queued, left untouched: ${data.skippedAlreadyInventoryQueued.join(', ')}</p>`;
+    }
+    if (data.blockedByCancellationOrRefund && data.blockedByCancellationOrRefund.length) {
+      html += `<p class="footnote" style="color:#b3392b">Blocked by cancellation/refund mismatch, needs manual review: ${data.blockedByCancellationOrRefund.map(b => `${b.order} (${b.sku})`).join(', ')}</p>`;
+    }
+    if (data.removedFulfilledOrCancelled && data.removedFulfilledOrCancelled.length) {
+      html += `<p class="footnote">Already Fulfilled or Cancelled in Shopify, not tagged: ${data.removedFulfilledOrCancelled.join(', ')}</p>`;
+    }
+    html += `<p class="footnote">${data.note}</p>`;
+
+    acddArrivedResultDiv.innerHTML = html;
+  } catch (err) {
+    acddArrivedResultDiv.innerHTML = `<div class="error">Request failed: ${err.message}</div>`;
+  }
+
+  acddArrivedUploadBtn.disabled = false;
+});
+
+
+// ── Box Size Recommendation ──────────────────────────────────────────────────
+const boxRecommendBtn = document.getElementById('boxRecommendBtn');
+const boxResultDiv = document.getElementById('boxResult');
+const boxInventoryList = document.getElementById('boxInventoryList');
+
+function renderBoxFitSection(label, options) {
+  if (!options.length) {
+    return `<div class="box-fit-card"><h4>${label}</h4><p class="footnote">No box on the active list fits this pile.</p></div>`;
+  }
+  const top = options[0];
+  const alternatives = options.slice(1);
+  let html = `<div class="box-fit-card">
+    <h4>${label}</h4>
+    ${renderBoxOptionRow(top, true)}`;
+  if (alternatives.length) {
+    html += `<details class="box-alt-details">
+      <summary>${alternatives.length} other size${alternatives.length > 1 ? 's' : ''} that would also work</summary>
+      ${alternatives.map(b => renderBoxOptionRow(b, false)).join('')}
+    </details>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
+function renderBoxOptionRow(fit, isPrimary) {
+  return `<div class="box-option-row ${isPrimary ? 'primary' : ''}" data-size="${fit.size}">
+    <div>
+      <div class="box-size-big">${fit.size}</div>
+      <div class="box-meta">${fit.type} &middot; ${fit.onHand} on hand${fit.onHand <= 0 ? ' &middot; <strong>out of stock</strong>' : fit.lowStock ? ' &middot; <strong>low stock</strong>' : ''}</div>
+    </div>
+    <button class="box-use-btn" data-size="${fit.size}">Used this one</button>
+  </div>`;
+}
+
+async function loadBoxInventory() {
+  try {
+    const res = await fetch('/api/box-size');
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      boxInventoryList.innerHTML = `<div class="error">Error: ${data.error || 'Unknown error'}</div>`;
+      return;
+    }
+    let html = '';
+    for (const b of data.boxes) {
+      html += `<div class="box-inv-row ${b.lowStock ? 'low' : ''}">
+        <span>${b.size} (${b.type})</span><span>${b.onHand}</span>
+      </div>`;
+    }
+    boxInventoryList.innerHTML = html;
+  } catch (err) {
+    boxInventoryList.innerHTML = `<div class="error">Request failed: ${err.message}</div>`;
+  }
+}
+loadBoxInventory();
+
+boxRecommendBtn.addEventListener('click', async () => {
+  const length = parseFloat(document.getElementById('boxLength').value);
+  const width = parseFloat(document.getElementById('boxWidth').value);
+  const height = parseFloat(document.getElementById('boxHeight').value);
+  if (!length || !width || !height) {
+    boxResultDiv.innerHTML = '<div class="error">Enter length, width, and height.</div>';
+    return;
+  }
+
+  boxRecommendBtn.disabled = true;
+  boxResultDiv.innerHTML = '<p class="loading">Finding the smallest box that fits...</p>';
+
+  try {
+    const res = await fetch('/api/box-size', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'recommend', length, width, height }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      boxResultDiv.innerHTML = `<div class="error">Error: ${data.error || 'Unknown error'}</div>`;
+      boxRecommendBtn.disabled = false;
+      return;
+    }
+
+    boxResultDiv.innerHTML = `<div class="box-fit-options">
+      ${renderBoxFitSection('Insured fit (+2")', data.insuredFitOptions)}
+      ${renderBoxFitSection('Tight fit (exact)', data.tightFitOptions)}
+    </div>`;
+
+    boxResultDiv.querySelectorAll('.box-use-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const size = btn.dataset.size;
+        btn.disabled = true;
+        btn.textContent = 'Saving...';
+        try {
+          const useRes = await fetch('/api/box-size', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'use', size }),
+          });
+          const useData = await useRes.json();
+          if (!useRes.ok || useData.error) {
+            btn.textContent = 'Failed - try again';
+            btn.disabled = false;
+            return;
+          }
+          btn.textContent = `Used - ${useData.onHand} left`;
+          loadBoxInventory();
+        } catch (err) {
+          btn.textContent = 'Failed - try again';
+          btn.disabled = false;
+        }
+      });
+    });
+  } catch (err) {
+    boxResultDiv.innerHTML = `<div class="error">Request failed: ${err.message}</div>`;
+  }
+
+  boxRecommendBtn.disabled = false;
+});
+
+// ── Picking Lists ────────────────────────────────────────────────────────
+
+const plState = { orders: [], selected: new Set() };
+const plResultDiv = document.getElementById('plResult');
+const plGenerateBtn = document.getElementById('plGenerateBtn');
+
+function plFmtDate(iso) {
+  const d = new Date(iso);
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function plUpdateGenerateBtn() {
+  plGenerateBtn.textContent = `Generate PDF (${plState.selected.size} selected)`;
+  plGenerateBtn.disabled = plState.selected.size === 0;
+}
+
+function plRender() {
+  if (plState.orders.length === 0) {
+    plResultDiv.innerHTML = '<p class="loading">No unfulfilled orders found.</p>';
+    return;
+  }
+  const rows = plState.orders.map((o) => `
+    <tr>
+      <td><input type="checkbox" data-id="${o.id}" ${plState.selected.has(o.id) ? 'checked' : ''}/></td>
+      <td>${o.orderNumber}</td>
+      <td>${plFmtDate(o.createdAt)}</td>
+      <td>${o.customerName}${o.city ? ' — ' + o.city + (o.provinceCode ? ', ' + o.provinceCode : '') : ''}</td>
+      <td>
+        <span class="pl-badge ${o.isLocalDelivery ? 'local' : 'ship'}">${o.isLocalDelivery ? 'LOCAL' : 'SHIP'}</span>
+        ${o.fulfillmentStatus === 'PARTIALLY_FULFILLED' ? '<span class="pl-badge partial">PARTIAL</span>' : ''}
+        ${o.notFullyArrived ? `<span class="pl-badge not-arrived" title="${o.notFullyArrivedReasons.join(', ')}">NOT FULLY ARRIVED</span>` : ''}
+      </td>
+    </tr>
+  `).join('');
+
+  plResultDiv.innerHTML = `
+    <table class="pl-table">
+      <thead><tr><th></th><th>Order</th><th>Date</th><th>Ship to</th><th>Delivery</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+
+  plResultDiv.querySelectorAll('input[type=checkbox]').forEach((cb) => {
+    cb.addEventListener('change', () => {
+      if (cb.checked) plState.selected.add(cb.dataset.id);
+      else plState.selected.delete(cb.dataset.id);
+      plUpdateGenerateBtn();
+    });
+  });
+  plUpdateGenerateBtn();
+}
+
+async function plLoadOrders(readyToPack) {
+  plResultDiv.innerHTML = '<p class="loading">Loading orders from Shopify...</p>';
+  const params = new URLSearchParams({ limit: '25' });
+  const filterStatus = document.getElementById('plFilterStatus');
+
+  if (readyToPack) {
+    params.set('readyToPack', '1');
+    filterStatus.textContent = 'Showing every order tagged "Order Received" that\'s still unfulfilled or partially fulfilled — ready to pack. Orders with a straggler backorder or slipping preorder are flagged NOT FULLY ARRIVED and left unchecked; check them yourself if you\'re deliberately shipping the rest.';
+  } else {
+    const since = document.getElementById('plSinceInput').value;
+    const until = document.getElementById('plUntilInput').value;
+    if (since) params.set('since', since);
+    if (until) params.set('until', until);
+    if (since || until) {
+      filterStatus.textContent = `Showing all unfulfilled orders${since ? ' from ' + since : ''}${until ? ' through ' + until : ''}.`;
+    } else {
+      filterStatus.textContent = 'Showing the most recent 25 unfulfilled orders. Set a date range to see everything in that window.';
+    }
+  }
+
+  try {
+    const res = await fetch('/api/picking-list?' + params.toString());
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'Failed to load orders');
+    plState.orders = data.orders;
+    // Ready-to-pack is a curated, just-invoiced batch - default everything
+    // selected EXCEPT orders flagged notFullyArrived (a genuine straggler
+    // item per the Order Needs sheet, or a slipping preorder release date).
+    // Those still show up so nothing's hidden, but Iain has to deliberately
+    // check them - matching how he actually decides to ship those orders.
+    plState.selected = readyToPack
+      ? new Set(data.orders.filter((o) => !o.notFullyArrived).map((o) => o.id))
+      : new Set();
+    plRender();
+  } catch (err) {
+    plResultDiv.innerHTML = `<div class="error">Error: ${err.message}</div>`;
+  }
+}
+
+document.getElementById('plRefreshBtn').addEventListener('click', () => plLoadOrders(false));
+document.getElementById('plApplyFilterBtn').addEventListener('click', () => plLoadOrders(false));
+document.getElementById('plReadyToPackBtn').addEventListener('click', () => plLoadOrders(true));
+document.getElementById('plSelectAllBtn').addEventListener('click', () => {
+  plState.orders.forEach((o) => plState.selected.add(o.id));
+  plRender();
+});
+document.getElementById('plClearBtn').addEventListener('click', () => {
+  plState.selected.clear();
+  plRender();
+});
+
+plGenerateBtn.addEventListener('click', async () => {
+  plGenerateBtn.disabled = true;
+  const prevText = plGenerateBtn.textContent;
+  plGenerateBtn.textContent = 'Generating...';
+  try {
+    const res = await fetch('/api/picking-list', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderIds: Array.from(plState.selected) }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'Failed to generate PDF');
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'picking-lists.pdf';
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert('Error generating picking lists: ' + err.message);
+  } finally {
+    plUpdateGenerateBtn();
+  }
+});
+
+plUpdateGenerateBtn();
+</script>
+
+</body>
+</html>

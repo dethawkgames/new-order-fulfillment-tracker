@@ -1,0 +1,645 @@
+import io
+import json
+import os
+import re
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timezone, timedelta
+from http.server import BaseHTTPRequestHandler
+
+import jwt
+from reportlab.lib.pagesizes import LETTER
+from reportlab.lib.units import inch
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, Image, Flowable
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_LEFT
+from reportlab.graphics.barcode import code128
+
+SHOPIFY_SHOP = os.environ.get('SHOPIFY_SHOP', 'detective-hawk-games.myshopify.com')
+SHOPIFY_API_VERSION = '2025-01'
+LOCAL_DELIVERY_TAG = os.environ.get('LOCAL_DELIVERY_TAG', 'local-delivery').lower()
+BIN_TRACKER_URL = os.environ.get('BIN_TRACKER_URL', 'https://dhg-bin-tracker-app.vercel.app')
+
+# ── Shopify auth (same pattern as api/mark-stage.py) ────────────────────────
+
+def get_shopify_token():
+    client_id = os.environ['SHOPIFY_CLIENT_ID']
+    client_secret = os.environ['SHOPIFY_CLIENT_SECRET']
+    data = urllib.parse.urlencode({
+        'grant_type': 'client_credentials',
+        'client_id': client_id,
+        'client_secret': client_secret,
+    }).encode()
+    req = urllib.request.Request(
+        f'https://{SHOPIFY_SHOP}/admin/oauth/access_token', data=data, method='POST'
+    )
+    with urllib.request.urlopen(req) as resp:
+        result = json.loads(resp.read())
+    return result['access_token']
+
+
+def shopify_graphql(query, variables=None):
+    token = get_shopify_token()
+    body = json.dumps({'query': query, 'variables': variables or {}}).encode()
+    req = urllib.request.Request(
+        f'https://{SHOPIFY_SHOP}/admin/api/{SHOPIFY_API_VERSION}/graphql.json',
+        data=body, method='POST',
+        headers={'Content-Type': 'application/json', 'X-Shopify-Access-Token': token}
+    )
+    with urllib.request.urlopen(req) as resp:
+        result = json.loads(resp.read())
+    if result.get('errors'):
+        raise Exception(f"Shopify GraphQL errors: {result['errors']}")
+    return result['data']
+
+
+# ── Order Needs readiness check (same sheet/auth pattern as mark-arrived.py,
+# read-only here - this endpoint never writes to the sheet) ─────────────────
+#
+# The Shopify tag/fulfillment status only tell us what Iain already decided
+# to do, not what's physically arrived. Two situations look identical from
+# Shopify's side but need different handling on a picking list:
+#   - a straggler line item still genuinely on backorder with no ETA
+#   - a preorder line item whose release date keeps slipping (e.g. Zoo Vadis)
+# Iain sometimes deliberately ships the rest of the order in both cases, so
+# this never blocks generating the PDF - it just flags the specific line
+# item so whoever's packing doesn't try to pull a unit that isn't there.
+
+# Rewired for the Weekly Orders sheet: per-order stage comes from the 'Order Lines' tab
+# (Qty / Ordered / Shipped / Received unit counts per order + SKU) instead of Order Needs.
+AGG_SHEET_ID = os.environ.get('WEEKLY_ORDERS_SHEET_ID', '1wHisaKXPcRpgXH9HXw6sdvTQi25QZoLj4cHPxSYlFrQ')
+ORDER_LINES_TAB = 'Order Lines'
+ORDER_LINES_RANGE = f"'{ORDER_LINES_TAB}'!A2:I50000"
+STAGE_ORDER = ['NotOrdered', 'Ordered', 'Shipped', 'Arrived']
+READY_STAGES = {'Fulfilled - Existing Stock', 'Arrived'}
+
+RELEASE_DATE_TAG_RE = re.compile(r'^release-date-(\d{4}-\d{2}-\d{2})$')
+HOLD_WINDOW_DAYS = 3  # same threshold mark-arrived.py uses for the order-level preorder hold tag
+
+def get_google_token(scope='https://www.googleapis.com/auth/spreadsheets.readonly'):
+    sa_email = os.environ['GOOGLE_SA_EMAIL']
+    raw_key = os.environ.get('GOOGLE_SA_PRIVATE_KEY_B64') or os.environ.get('GOOGLE_SA_PRIVATE_KEY', '')
+    if os.environ.get('GOOGLE_SA_PRIVATE_KEY_B64'):
+        import base64
+        sa_key = base64.b64decode(raw_key).decode('utf-8')
+    else:
+        sa_key = raw_key.replace('\\n', '\n')
+    now = int(time.time())
+    payload = {'iss': sa_email, 'scope': scope, 'aud': 'https://oauth2.googleapis.com/token', 'exp': now + 3600, 'iat': now}
+    assertion = jwt.encode(payload, sa_key, algorithm='RS256')
+    data = urllib.parse.urlencode({'grant_type': 'urn:ietf:params:oauth:grant-type:jwt-bearer', 'assertion': assertion}).encode()
+    req = urllib.request.Request('https://oauth2.googleapis.com/token', data=data, method='POST')
+    with urllib.request.urlopen(req) as resp:
+        return json.loads(resp.read())['access_token']
+
+
+def sheets_get(spreadsheet_id, range_str):
+    token = get_google_token()
+    url = f'https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{urllib.parse.quote(range_str)}'
+    req = urllib.request.Request(url, headers={'Authorization': f'Bearer {token}'})
+    with urllib.request.urlopen(req) as resp:
+        return json.loads(resp.read()).get('values', [])
+
+
+def load_order_needs_stages():
+    """(order_name, sku) -> least-advanced stage of that order's units for the SKU, from the
+    Order Lines tab: 'Arrived' once every unit is received, 'Shipped' once every unit has
+    shipped, 'Ordered' once every unit is on a submitted order, otherwise 'NotOrdered'.
+    Orders with no lines (older orders, in-stock items) are absent and read as ready."""
+    try:
+        rows = sheets_get(AGG_SHEET_ID, ORDER_LINES_RANGE)
+    except Exception:
+        return None  # Sheets unavailable - callers treat this as "can't verify", not "not ready"
+    stages = {}
+    for row in rows:
+        row = list(row) + [''] * (9 - len(row))
+        order_name, sku = str(row[2]).strip(), str(row[4]).strip()
+        if not order_name or not sku:
+            continue
+        try:
+            qty, ordered, shipped, received = (int(float(x or 0)) for x in (row[5], row[6], row[7], row[8]))
+        except ValueError:
+            continue
+        stage = ('Arrived' if received >= qty else 'Shipped' if shipped >= qty
+                 else 'Ordered' if ordered >= qty else 'NotOrdered')
+        key = (order_name, sku)
+        prev = stages.get(key)
+        if prev is None or STAGE_ORDER.index(stage) < STAGE_ORDER.index(prev):
+            stages[key] = stage
+    return stages
+
+
+def line_item_readiness(order_name, sku, product_tags, needs_stages):
+    """Returns (reason, detail) for a single owed line item - reason is
+    'backorder', 'preorder', or None (ready to pack). needs_stages=None
+    means the Order Needs sheet couldn't be read, so only the preorder
+    check (which doesn't depend on it) still runs."""
+    if needs_stages is not None and sku:
+        stage = needs_stages.get((order_name, sku))
+        if stage is not None and stage not in READY_STAGES:
+            return 'backorder', None
+
+    tags_lower = [t.lower() for t in (product_tags or [])]
+    if 'preorder' in tags_lower:
+        latest_release = None
+        for t in product_tags:
+            m = RELEASE_DATE_TAG_RE.match(t.strip())
+            if m:
+                try:
+                    d = datetime.strptime(m.group(1), '%Y-%m-%d').replace(tzinfo=timezone.utc)
+                    if latest_release is None or d > latest_release:
+                        latest_release = d
+                except ValueError:
+                    continue
+        if latest_release and latest_release - datetime.now(timezone.utc) > timedelta(days=HOLD_WINDOW_DAYS):
+            return 'preorder', latest_release
+
+    return None, None
+
+
+# ── First-shipment check (same definition used for thank-you cards) ────────
+# "First shipment" = customer has no OTHER order that has ever been fulfilled,
+# NOT just their first order placed - someone can place several orders before
+# any of them ship.
+
+def is_first_shipment(order_node):
+    customer = order_node.get('customer')
+    if not customer:
+        return True  # guest checkout - treat as first shipment
+    order_id = order_node['id']
+    prior_orders = ((customer.get('orders') or {}).get('edges')) or []
+    has_fulfilled = any(
+        e['node']['id'] != order_id and e['node'].get('displayFulfillmentStatus') == 'FULFILLED'
+        for e in prior_orders
+    )
+    return not has_fulfilled
+
+
+# ── Bin tracker lookup (same API the Admin Block extension calls) ──────────
+
+def fetch_bin_info(order_id):
+    """Returns the bin tracker's per-line-item bin data for this order, or
+    None if the lookup fails (network error, tracker down, etc.) so callers
+    can distinguish 'unknown' from 'confirmed not in a bin'."""
+    try:
+        qs = urllib.parse.urlencode({'orderId': order_id})
+        req = urllib.request.Request(f'{BIN_TRACKER_URL}/api/order-bin-info?{qs}')
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            return json.loads(resp.read())
+    except Exception:
+        return None
+
+
+def build_bin_lookup(bin_response):
+    """productId -> queue of location-lists, one entry per matching Shopify
+    line item, in the order the bin tracker returned them. A queue (rather
+    than a single value) handles the rare case of the same product appearing
+    as more than one line item on an order."""
+    lookup = {}
+    if not bin_response:
+        return lookup
+    for li in bin_response.get('lineItems', []):
+        pid = li.get('productId')
+        if not pid:
+            continue
+        lookup.setdefault(pid, []).append(li.get('locations') or [])
+    return lookup
+
+
+def format_bin_locations(locations):
+    if not locations:
+        return None
+    parts = [loc.get('binNumber') for loc in locations if loc.get('binNumber')]
+    if not parts:
+        return None
+    label = 'Bin' if len(parts) == 1 else 'Bins'
+    return f"{label}: {', '.join(parts)}"
+
+
+# ── Order list (unfulfilled/partial, excluding cancelled) ──────────────────
+
+ORDER_LIST_QUERY = '''
+query PickableOrders($first: Int!, $searchQuery: String!, $cursor: String) {
+  orders(first: $first, after: $cursor, query: $searchQuery, sortKey: CREATED_AT, reverse: true) {
+    pageInfo { hasNextPage endCursor }
+    edges {
+      node {
+        id
+        name
+        createdAt
+        displayFulfillmentStatus
+        cancelledAt
+        tags
+        customer { firstName lastName }
+        shippingAddress { name city provinceCode }
+        lineItems(first: 250) {
+          edges {
+            node {
+              sku
+              currentQuantity
+              product { tags }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+'''
+
+DEFAULT_ORDER_LIMIT = 25
+PAGE_SIZE = 50
+# Safety net for date-filtered/ready-to-pack pulls so a huge accidental range
+# can't run away indefinitely - well beyond any realistic weekly/monthly pick batch.
+MAX_FILTERED_ORDERS = 1000
+# Applied by mark-arrived.py once every unit on the order has arrived. The
+# sibling 'dhg-status-order-received-preorder' tag is deliberately excluded -
+# those are held back until closer to release and aren't ready to pack.
+READY_TO_PACK_TAG = 'dhg-status-order-received'
+
+def list_pickable_orders(limit=DEFAULT_ORDER_LIMIT, since=None, until=None, ready_to_pack=False):
+    """No date range and not ready-to-pack: most-recent-first, capped at
+    `limit` (default 25 - same as iPacky's picking list). With a date range
+    given, OR with ready_to_pack set, the 25-cap is lifted entirely and every
+    matching order is returned (paginated), up to a generous safety cap -
+    for ready_to_pack there's no natural cap since it's a curated batch, and
+    quietly capping it at 25 would silently hide orders that need packing."""
+    has_date_filter = bool(since or until)
+    uncapped = has_date_filter or ready_to_pack
+
+    query_parts = ['(fulfillment_status:unfulfilled OR fulfillment_status:partial)']
+    if ready_to_pack:
+        query_parts.append(f"tag:'{READY_TO_PACK_TAG}'")
+    if since:
+        query_parts.append(f'created_at:>={since}')
+    if until:
+        query_parts.append(f'created_at:<={until}')
+    search_query = ' AND '.join(query_parts)
+
+    results = []
+    cursor = None
+    has_next = True
+
+    if uncapped:
+        page_size = PAGE_SIZE
+        fetch_cap = MAX_FILTERED_ORDERS
+    else:
+        page_size = max(1, min(int(limit), DEFAULT_ORDER_LIMIT))
+        fetch_cap = page_size
+
+    # Only pull the Order Needs sheet when it's actually needed - the
+    # default/date-range views don't check readiness, just ready-to-pack.
+    needs_stages = load_order_needs_stages() if ready_to_pack else None
+
+    while has_next and len(results) < fetch_cap:
+        data = shopify_graphql(ORDER_LIST_QUERY, {'first': page_size, 'searchQuery': search_query, 'cursor': cursor})
+        for edge in data['orders']['edges']:
+            node = edge['node']
+            if node.get('cancelledAt'):
+                continue
+            line_item_edges = (node.get('lineItems') or {}).get('edges') or []
+            remaining_qty = sum((e['node'].get('currentQuantity') or 0) for e in line_item_edges)
+            if remaining_qty <= 0:
+                continue  # fully refunded - nothing left to pick, even if not formally cancelled
+            tags = [t.lower() for t in (node.get('tags') or [])]
+            ship = node.get('shippingAddress') or {}
+            customer = node.get('customer') or {}
+            name = ship.get('name') or ' '.join(filter(None, [customer.get('firstName'), customer.get('lastName')])) or 'No name on file'
+
+            not_ready_reasons = []
+            if ready_to_pack:
+                for li_edge in line_item_edges:
+                    li = li_edge['node']
+                    if (li.get('currentQuantity') or 0) <= 0:
+                        continue
+                    product_tags = (li.get('product') or {}).get('tags') or []
+                    reason, detail = line_item_readiness(node['name'], li.get('sku'), product_tags, needs_stages)
+                    if reason:
+                        not_ready_reasons.append(reason)
+
+            results.append({
+                'id': node['id'],
+                'orderNumber': node['name'],
+                'createdAt': node['createdAt'],
+                'fulfillmentStatus': node['displayFulfillmentStatus'],
+                'customerName': name,
+                'city': ship.get('city') or '',
+                'provinceCode': ship.get('provinceCode') or '',
+                'isLocalDelivery': LOCAL_DELIVERY_TAG in tags,
+                'notFullyArrived': bool(not_ready_reasons),
+                'notFullyArrivedReasons': sorted(set(not_ready_reasons)),
+            })
+        page_info = data['orders']['pageInfo']
+        has_next = page_info['hasNextPage']
+        cursor = page_info['endCursor']
+
+    return results[:fetch_cap]
+
+
+# ── Order detail for PDF generation ─────────────────────────────────────────
+
+ORDER_DETAIL_QUERY = '''
+query OrderDetail($id: ID!) {
+  order(id: $id) {
+    id
+    name
+    createdAt
+    tags
+    customer {
+      id
+      firstName
+      lastName
+      orders(first: 50) {
+        edges { node { id displayFulfillmentStatus } }
+      }
+    }
+    shippingAddress { name address1 address2 city provinceCode zip country }
+    lineItems(first: 250) {
+      edges {
+        node {
+          title
+          sku
+          quantity
+          currentQuantity
+          image { url(transform: {maxWidth: 200, maxHeight: 200}) }
+          variant {
+            title
+            image { url(transform: {maxWidth: 200, maxHeight: 200}) }
+            product { id tags featuredImage { url(transform: {maxWidth: 200, maxHeight: 200}) } }
+          }
+        }
+      }
+    }
+  }
+}
+'''
+
+def get_order_details(order_ids):
+    orders = []
+    needs_stages = load_order_needs_stages()
+    for order_id in order_ids:
+        data = shopify_graphql(ORDER_DETAIL_QUERY, {'id': order_id})
+        node = data.get('order')
+        if not node:
+            continue
+        tags = [t.lower() for t in (node.get('tags') or [])]
+        ship = node.get('shippingAddress') or {}
+        customer = node.get('customer') or {}
+        name = ship.get('name') or ' '.join(filter(None, [customer.get('firstName'), customer.get('lastName')])) or 'No name on file'
+        address_lines = [
+            ship.get('address1'),
+            ship.get('address2'),
+            ', '.join(filter(None, [ship.get('city'), ship.get('provinceCode'), ship.get('zip')])),
+            ship.get('country'),
+        ]
+        address = '\n'.join(filter(None, address_lines)) or 'No shipping address on file'
+
+        bin_lookup = build_bin_lookup(fetch_bin_info(order_id))
+
+        line_items = []
+        for edge in node['lineItems']['edges']:
+            li = edge['node']
+            qty = li.get('currentQuantity')
+            if qty is None:
+                qty = li.get('quantity', 0)
+            if qty <= 0:
+                continue  # fully refunded line item, excluded per DHG standing rule
+            variant = li.get('variant') or {}
+            product = variant.get('product') or {}
+            image_url = (
+                (li.get('image') or {}).get('url')
+                or (variant.get('image') or {}).get('url')
+                or (product.get('featuredImage') or {}).get('url')
+            )
+            variant_title = variant.get('title')
+
+            product_id = product.get('id')
+            bin_locations = None
+            if product_id and bin_lookup.get(product_id):
+                bin_locations = bin_lookup[product_id].pop(0)
+
+            reason, detail = line_item_readiness(node['name'], li.get('sku'), product.get('tags'), needs_stages)
+            not_ready_badge = None
+            if reason == 'backorder':
+                not_ready_badge = 'BACKORDERED — not yet arrived'
+            elif reason == 'preorder':
+                not_ready_badge = f"PREORDER — releases {detail.strftime('%b %-d, %Y')}" if detail else 'PREORDER — release date pending'
+
+            line_items.append({
+                'title': li['title'],
+                'sku': li.get('sku') or '',
+                'quantity': qty,
+                'variantTitle': variant_title if variant_title and variant_title != 'Default Title' else '',
+                'imageUrl': image_url,
+                'binLabel': format_bin_locations(bin_locations),
+                'notReadyBadge': not_ready_badge,
+            })
+
+        orders.append({
+            'orderNumber': node['name'],
+            'createdAt': node['createdAt'],
+            'isLocalDelivery': LOCAL_DELIVERY_TAG in tags,
+            'isFirstShipment': is_first_shipment(node),
+            'shippingName': name,
+            'shippingAddress': address,
+            'lineItems': line_items,
+        })
+    return orders
+
+
+# ── PDF generation (reportlab) ──────────────────────────────────────────────
+
+PLUM_DARK = colors.HexColor('#38112F')
+CORAL = colors.HexColor('#EF3F45')
+TEAL_DEEP = colors.HexColor('#059B9C')
+CREAM = colors.HexColor('#E2D4C3')
+INK = colors.HexColor('#2A1622')
+INK_SOFT = colors.HexColor('#6b5a63')
+
+_image_cache = {}
+
+def fetch_image_bytes(url):
+    if not url:
+        return None
+    if url in _image_cache:
+        return _image_cache[url]
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = resp.read()
+        _image_cache[url] = data
+        return data
+    except Exception:
+        return None
+
+
+def format_date(iso_str):
+    try:
+        dt = datetime.fromisoformat(iso_str.replace('Z', '+00:00'))
+        return dt.strftime('%b %-d, %Y')
+    except Exception:
+        return iso_str
+
+
+def build_order_flowables(order, styles):
+    flow = []
+
+    header_data = [[
+        Paragraph(f"Order {order['orderNumber']}", styles['OrderNum']),
+        Paragraph(
+            'LOCAL DELIVERY' if order['isLocalDelivery'] else 'SHIPPING',
+            styles['BadgeLocal'] if order['isLocalDelivery'] else styles['BadgeShip'],
+        ),
+    ]]
+    header_table = Table(header_data, colWidths=[4.5 * inch, 2.3 * inch])
+    header_table.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
+        ('LINEBELOW', (0, 0), (-1, 0), 2, PLUM_DARK),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+    ]))
+    flow.append(header_table)
+
+    # Order-number barcode - encodes the bare number (no '#'), exactly what
+    # Order Check's lookup expects from a scan. humanReadable prints the
+    # digits underneath so it's still readable if the scanner misses.
+    barcode_value = order['orderNumber'].lstrip('#')
+    order_barcode = code128.Code128(
+        barcode_value, barHeight=0.35 * inch, barWidth=0.011 * inch,
+        humanReadable=True, fontSize=8,
+    )
+    flow.append(Spacer(1, 4))
+    flow.append(order_barcode)
+    flow.append(Spacer(1, 6))
+
+    flow.append(Paragraph(f"Ordered {format_date(order['createdAt'])}", styles['DateLine']))
+
+    if order.get('isFirstShipment'):
+        flow.append(Spacer(1, 6))
+        flow.append(Paragraph('★ FIRST SHIPMENT — add a thank-you card', styles['BadgeFirstShipment']))
+
+    flow.append(Spacer(1, 12))
+
+    flow.append(Paragraph('SHIP TO', styles['ShipToLabel']))
+    flow.append(Paragraph(order['shippingName'], styles['ShipToName']))
+    for line in order['shippingAddress'].split('\n'):
+        flow.append(Paragraph(line, styles['ShipToAddr']))
+    flow.append(Spacer(1, 16))
+
+    rows = [['', 'Item', 'Qty']]
+    row_styles = []
+    for i, li in enumerate(order['lineItems'], start=1):
+        img_bytes = fetch_image_bytes(li['imageUrl'])
+        img_cell = Image(io.BytesIO(img_bytes), width=0.55 * inch, height=0.55 * inch) if img_bytes else ''
+        title_bits = f"<b>{li['title']}</b>"
+        if li['variantTitle']:
+            title_bits += f"<br/><font size=8 color='#6b5a63'>{li['variantTitle']}</font>"
+        if li['sku']:
+            title_bits += f"<br/><font size=8 color='#6b5a63'>SKU: {li['sku']}</font>"
+        if li.get('binLabel'):
+            title_bits += f"<br/><font size=9 color='#059B9C'><b>{li['binLabel']}</b></font>"
+        if li.get('notReadyBadge'):
+            title_bits += f"<br/><font size=9 color='#C0392B'><b>{li['notReadyBadge']}</b></font>"
+        rows.append([img_cell, Paragraph(title_bits, styles['ItemTitle']), Paragraph(str(li['quantity']), styles['QtyBox'])])
+
+    items_table = Table(rows, colWidths=[0.75 * inch, 5.05 * inch, 1.0 * inch], repeatRows=1)
+    table_style = [
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('ALIGN', (2, 0), (2, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 9),
+        ('TEXTCOLOR', (0, 0), (-1, 0), INK_SOFT),
+        ('LINEBELOW', (0, 0), (-1, 0), 1, colors.HexColor('#cccccc')),
+        ('LINEBELOW', (0, 1), (-1, -1), 0.5, colors.HexColor('#e2e2e2')),
+        ('TOPPADDING', (0, 0), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+    ]
+    items_table.setStyle(TableStyle(table_style))
+    flow.append(items_table)
+
+    return flow
+
+
+def generate_pdf(orders):
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle('OrderNum', fontSize=20, fontName='Helvetica-Bold', textColor=INK, alignment=TA_LEFT))
+    styles.add(ParagraphStyle('DateLine', fontSize=10, textColor=INK_SOFT))
+    styles.add(ParagraphStyle('BadgeLocal', fontSize=10, fontName='Helvetica-Bold', textColor=colors.HexColor('#1e6b34'), backColor=colors.HexColor('#dff5e1'), borderPadding=5))
+    styles.add(ParagraphStyle('BadgeShip', fontSize=10, fontName='Helvetica-Bold', textColor=colors.HexColor('#1c4587'), backColor=colors.HexColor('#e7eefc'), borderPadding=5))
+    styles.add(ParagraphStyle('BadgeFirstShipment', fontSize=10, fontName='Helvetica-Bold', textColor=colors.HexColor('#8a5a00'), backColor=colors.HexColor('#fdf1d6'), borderPadding=5))
+    styles.add(ParagraphStyle('ShipToLabel', fontSize=8, fontName='Helvetica-Bold', textColor=INK_SOFT))
+    styles.add(ParagraphStyle('ShipToName', fontSize=13, fontName='Helvetica-Bold', textColor=INK))
+    styles.add(ParagraphStyle('ShipToAddr', fontSize=10, textColor=INK))
+    styles.add(ParagraphStyle('ItemTitle', fontSize=10.5, textColor=INK, leading=13))
+    styles.add(ParagraphStyle('QtyBox', fontSize=14, fontName='Helvetica-Bold', textColor=INK, alignment=1))
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=LETTER, topMargin=0.5 * inch, bottomMargin=0.5 * inch, leftMargin=0.5 * inch, rightMargin=0.5 * inch)
+
+    story = []
+    for i, order in enumerate(orders):
+        story.extend(build_order_flowables(order, styles))
+        if i < len(orders) - 1:
+            story.append(PageBreak())
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+# ── HTTP handler ─────────────────────────────────────────────────────────────
+
+class handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        try:
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            limit = query.get('limit', [DEFAULT_ORDER_LIMIT])[0]
+            since = query.get('since', [None])[0] or None
+            until = query.get('until', [None])[0] or None
+            ready_to_pack = query.get('readyToPack', [None])[0] in ('1', 'true', 'True')
+            orders = list_pickable_orders(limit=limit, since=since, until=until, ready_to_pack=ready_to_pack)
+            self._send_json(200, {'success': True, 'orders': orders, 'limit': int(limit), 'readyToPack': ready_to_pack})
+        except Exception as e:
+            import traceback
+            self._send_json(500, {'error': str(e), 'trace': traceback.format_exc()})
+
+    def do_POST(self):
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(content_length)) if content_length else {}
+            order_ids = body.get('orderIds') or []
+            if not order_ids:
+                self._send_json(400, {'error': 'orderIds must be a non-empty array'})
+                return
+
+            orders = get_order_details(order_ids)
+            pdf_bytes = generate_pdf(orders)
+
+            self.send_response(200)
+            self._cors_headers()
+            self.send_header('Content-Type', 'application/pdf')
+            self.send_header('Content-Disposition', 'attachment; filename="picking-lists.pdf"')
+            self.end_headers()
+            self.wfile.write(pdf_bytes)
+        except Exception as e:
+            import traceback
+            self._send_json(500, {'error': str(e), 'trace': traceback.format_exc()})
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self._cors_headers()
+        self.end_headers()
+
+    def _cors_headers(self):
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+
+    def _send_json(self, status, data):
+        self.send_response(status)
+        self._cors_headers()
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode())
