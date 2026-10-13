@@ -140,40 +140,49 @@ def run_verify(files, fields):
     return 200, core.verify_quote(_io.SheetsStore(), quote)
 
 
+def _cors(h):
+    h.send_header('Access-Control-Allow-Origin', '*')
+    h.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
+    h.send_header('Access-Control-Allow-Headers', 'Content-Type')
+
+
+def _send(h, status, data):
+    h.send_response(status)
+    _cors(h)
+    h.send_header('Content-Type', 'application/json')
+    h.end_headers()
+    h.wfile.write(json.dumps(data).encode())
+
+
+def handle_options(h):
+    h.send_response(200)
+    _cors(h)
+    h.end_headers()
+
+
+def handle_post(h, kind, stage=None):
+    """Body of do_POST for every endpoint file (each file declares its own
+    `class handler(BaseHTTPRequestHandler)` so Vercel can detect the entrypoint)."""
+    try:
+        ctype = h.headers.get('Content-Type', '')
+        if 'multipart/form-data' not in ctype:
+            return _send(h, 400, {'error': 'Expected multipart/form-data'})
+        body = h.rfile.read(int(h.headers.get('Content-Length', 0)))
+        files, fields = parse_multipart(ctype, body)
+        if kind == 'verify':
+            status, data = run_verify(files, fields)
+        else:
+            status, data = run_upload(kind, stage, files, fields)
+        _send(h, status, data)
+    except core.DuplicateInvoice as e:
+        _send(h, 409, {'error': str(e)})
+    except Exception as e:
+        _send(h, 500, {'error': str(e), 'trace': traceback.format_exc()})
+
+
 def make_handler(kind, stage=None):
+    """Used by tests; the deployed files declare the class literally."""
     class handler(BaseHTTPRequestHandler):
-        def do_POST(self):
-            try:
-                ctype = self.headers.get('Content-Type', '')
-                if 'multipart/form-data' not in ctype:
-                    return self._send(400, {'error': 'Expected multipart/form-data'})
-                body = self.rfile.read(int(self.headers.get('Content-Length', 0)))
-                files, fields = parse_multipart(ctype, body)
-                if kind == 'verify':
-                    status, data = run_verify(files, fields)
-                else:
-                    status, data = run_upload(kind, stage, files, fields)
-                self._send(status, data)
-            except core.DuplicateInvoice as e:
-                self._send(409, {'error': str(e)})
-            except Exception as e:
-                self._send(500, {'error': str(e), 'trace': traceback.format_exc()})
-
-        def do_OPTIONS(self):
-            self.send_response(200)
-            self._cors()
-            self.end_headers()
-
-        def _cors(self):
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
-            self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-
-        def _send(self, status, data):
-            self.send_response(status)
-            self._cors()
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps(data).encode())
-
+        def do_POST(self): handle_post(self, kind, stage)
+        def do_OPTIONS(self): handle_options(self)
     return handler
