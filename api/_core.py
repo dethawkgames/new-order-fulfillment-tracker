@@ -418,7 +418,30 @@ def tag_orders(shopify, lines, touched, stage, dry_run):
 
 # ── Asmodee quote check (read only) ──────────────────────────────────────────
 
-def verify_quote(store, quote_items):
+_OCR_CONFUSE = str.maketrans({'O': '0', 'I': '1', 'L': '1', 'S': '5', 'B': '8', 'Z': '2'})
+
+
+def _ocr_key(sku):
+    import re as _re
+    return _re.sub(r'(.)\1+', r'\1', str(sku).upper().translate(_OCR_CONFUSE))
+
+
+def snap_ocr_skus(quoted, locked):
+    """OCR reads 0 as O, drops/duplicates a character, etc. For a quoted SKU that is not locked,
+    adopt the locked SKU whose OCR-normalised form is identical, but only when exactly one
+    locked SKU fits and the quote doesn't already list that SKU. -> (quoted, [(read, adopted)])"""
+    out, snapped = dict(quoted), []
+    for sku in sorted(quoted):
+        if sku in locked:
+            continue
+        cands = [l for l in locked if l not in quoted and _ocr_key(l) == _ocr_key(sku)]
+        if len(cands) == 1:
+            out[cands[0]] = out.get(cands[0], 0) + out.pop(sku)
+            snapped.append({'read': sku, 'adopted': cands[0]})
+    return out, snapped
+
+
+def verify_quote(store, quote_items, ocr=False):
     """Compare a Sales Quote with the most recent locked Asmodee cycle. Looks at all
     three tabs, so it still works after part of the order has shipped."""
     rows = []
@@ -441,6 +464,9 @@ def verify_quote(store, quote_items):
     for it in quote_items:
         sku = str(it.get('sku') or '').strip()
         quoted[sku] = quoted.get(sku, 0) + _int(it.get('quantity'))
+    snapped = []
+    if ocr:
+        quoted, snapped = snap_ocr_skus(quoted, locked)
     mism = []
     for sku in sorted(set(locked) | set(quoted)):
         l = locked.get(sku, {}).get('qty', 0)
@@ -455,4 +481,5 @@ def verify_quote(store, quote_items):
         'success': True, 'itemsInQuote': len(quote_items), 'skusLocked': len(locked),
         'mismatchCount': len(mism), 'clean': not mism, 'mismatches': mism,
         'comparedAgainstSupplierOrderId': f'the {lock_date} lock (through order #{latest})',
+        'source': 'ocr' if ocr else 'text', 'ocrSnapped': snapped,
     }

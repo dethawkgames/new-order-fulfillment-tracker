@@ -201,6 +201,33 @@ class Quote(unittest.TestCase):
         self.assertIn('6020', out['comparedAgainstSupplierOrderId'])
 
 
+class OcrQuote(unittest.TestCase):
+    def _text(self):
+        import pathlib
+        return (pathlib.Path(__file__).parent / 'fixtures' / 'asmodee_quote_ocr.txt').read_text()
+
+    def test_parse_ocr_text_of_real_image_only_quote(self):
+        import _parsers
+        got = _parsers.parse_ocr_quote_text(self._text())
+        self.assertEqual([(i['sku'], i['quantity']) for i in got],
+                         [('SWQ96', 1), ('MC65EN', 1), ('SWQ20', 1), ('SWQ13', 1), ('MCP08', 1), ('CP170', 1),
+                          ('CP129', 1), ('SWGO04EN', 1), ('DOW910251', 1), ('ODGTTS0101EN', 1), ('SWQ28', 1)])
+
+    def test_snap_fixes_ocr_misreads_but_not_real_neighbours(self):
+        locked = {'SWG04EN': {}, 'SWQ20': {}, 'SWQ28': {}, 'ODGTTS0101EN': {}}
+        quoted = {'SWGO04EN': 1, 'SWQ20': 1, 'SWQ28': 1, 'ODGTTS0101EN': 1}
+        out, snapped = c.snap_ocr_skus(quoted, locked)
+        self.assertEqual(snapped, [{'read': 'SWGO04EN', 'adopted': 'SWG04EN'}])
+        self.assertEqual(sorted(out), ['ODGTTS0101EN', 'SWG04EN', 'SWQ20', 'SWQ28'])
+
+    def test_image_only_pdf_asks_for_ocr_instead_of_false_mismatches(self):
+        import _parsers
+        from unittest import mock
+        with mock.patch.object(_parsers, 'pdf_has_text', return_value=False), mock.patch.dict('sys.modules', {'_tio': mock.MagicMock()}):
+            status, data = h.run_verify([('q.pdf', b'x')], {})
+        self.assertEqual((status, data), (200, {'needsOcr': True}))
+
+
 class Http(unittest.TestCase):
     def test_multipart(self):
         b = 'XX'

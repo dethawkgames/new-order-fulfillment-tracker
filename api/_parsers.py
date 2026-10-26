@@ -2,6 +2,7 @@
 reconcile.py (Asmodee quote + invoice) and reconcile-ud.py (Universal Dist
 invoice), whose column positions were validated against real documents."""
 import io
+import re
 import pdfplumber
 import openpyxl
 
@@ -90,6 +91,47 @@ def parse_asmodee_sales_quote(file_bytes):
             if current_item:
                 line_items.append(current_item)
     return line_items
+
+def pdf_has_text(file_bytes):
+    """False for image-only PDFs (printed/scanned/outlined text) - pdfplumber sees no words."""
+    with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+        return any(page.extract_words() for page in pdf.pages)
+
+
+_OCR_ROW = re.compile(r'^(?P<sku>[A-Za-z0-9][A-Za-z0-9\-]*)\s+(?P<desc>.+?)\s+(?P<msrp>\d+\.\d\d)\s+(?P<qty>\d+)\s+Each\b')
+_OCR_SKU_TAIL = re.compile(r'^[A-Z0-9]{1,6}$')
+
+
+def parse_ocr_quote_text(text):
+    """Parses OCR text of an Asmodee Sales Quote (the browser OCRs image-only PDFs and
+    sends the text). Same output shape as parse_asmodee_sales_quote. A SKU that wraps onto
+    its own line (e.g. 'ODGTTS010' / '1EN') is a short alphanumeric token containing a digit;
+    wrapped description words ('Pack', 'Man') have none."""
+    items, current, in_table = [], None, False
+    for raw in (text or '').splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith('No.') and 'Description' in line:
+            in_table = True
+            continue
+        if not in_table:
+            continue
+        if line.startswith('Total') and '$' in line:
+            break
+        if line.startswith('Home Page') or line.startswith('www.') or 'customerservice@' in line:
+            continue
+        m = _OCR_ROW.match(line)
+        if m:
+            current = {'sku': m.group('sku'), 'description': m.group('desc'), 'quantity': int(m.group('qty'))}
+            items.append(current)
+        elif current is not None:
+            if _OCR_SKU_TAIL.match(line) and any(ch.isdigit() for ch in line):
+                current['sku'] += line
+            else:
+                current['description'] = (current['description'] + ' ' + line).strip()
+    return items
+
 
 def _is_sales_quote_pdf(file_bytes):
     """Detect Sales Quote vs Sales Invoice from the document title on page 1."""

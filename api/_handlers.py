@@ -134,9 +134,20 @@ def _now():
 def run_verify(files, fields):
     import _tio as _io
     import _parsers
+    ocr_text = fields.get('ocr_text')
+    if ocr_text:                                   # browser OCR of an image-only PDF
+        quote = _parsers.parse_ocr_quote_text(ocr_text)
+        if not quote:
+            return 200, {'warning': 'OCR could not find any line items on this quote. Try a clearer copy, or the original PDF from Asmodee.'}
+        return 200, core.verify_quote(_io.SheetsStore(), quote, ocr=True)
     if not files:
         return 400, {'error': 'No file found in upload'}
-    quote = _parsers.parse_asmodee_quote(files[0][1])
+    data = files[0][1]
+    if not _parsers.pdf_has_text(data):
+        return 200, {'needsOcr': True}
+    quote = _parsers.parse_asmodee_quote(data)
+    if not quote:
+        return 200, {'warning': 'No line items could be read from this PDF, so nothing was compared. Check it is an Asmodee Sales Quote.'}
     return 200, core.verify_quote(_io.SheetsStore(), quote)
 
 

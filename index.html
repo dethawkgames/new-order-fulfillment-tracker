@@ -629,6 +629,41 @@ function statusClass(status) {
   return '';
 }
 
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const el = document.createElement('script');
+    el.src = src; el.onload = resolve; el.onerror = () => reject(new Error('Could not load ' + src));
+    document.head.appendChild(el);
+  });
+}
+
+// Renders each page of an image-only PDF and OCRs it (pdf.js + tesseract.js, loaded on demand).
+async function ocrPdf(file) {
+  if (!window.pdfjsLib) {
+    await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  }
+  if (!window.Tesseract) await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js');
+  const pdf = await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+  const worker = await window.Tesseract.createWorker('eng');
+  await worker.setParameters({ tessedit_pageseg_mode: '6' });
+  let text = '';
+  try {
+    for (let n = 1; n <= pdf.numPages; n++) {
+      const page = await pdf.getPage(n);
+      const viewport = page.getViewport({ scale: 4 });
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.width; canvas.height = viewport.height;
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+      const { data } = await worker.recognize(canvas);
+      text += data.text + '\n';
+    }
+  } finally {
+    await worker.terminate();
+  }
+  return text;
+}
+
 uploadBtn.addEventListener('click', async () => {
   if (!selectedFile) return;
 
@@ -639,8 +674,18 @@ uploadBtn.addEventListener('click', async () => {
   formData.append('file', selectedFile);
 
   try {
-    const res = await fetch('/api/verify-asmodee-quote', { method: 'POST', body: formData });
-    const data = await res.json();
+    let res = await fetch('/api/verify-asmodee-quote', { method: 'POST', body: formData });
+    let data = await res.json();
+
+    if (res.ok && data.needsOcr) {
+      // Image-only PDF (printed/scanned): read it in the browser, then compare the text on the server.
+      resultDiv.innerHTML = '<p class="loading">This PDF is an image with no readable text. Reading it with OCR in your browser (about 10-20 seconds)...</p>';
+      const ocrText = await ocrPdf(selectedFile);
+      const fd = new FormData();
+      fd.append('ocr_text', ocrText);
+      res = await fetch('/api/verify-asmodee-quote', { method: 'POST', body: fd });
+      data = await res.json();
+    }
 
     if (!res.ok || data.error) {
       resultDiv.innerHTML = `<div class="error">Error: ${data.error || 'Unknown error'}</div>`;
@@ -654,7 +699,15 @@ uploadBtn.addEventListener('click', async () => {
       return;
     }
 
-    let html = `<div class="summary">
+    let html = '';
+    if (data.source === 'ocr') {
+      html += '<p class="footnote"><strong>Read by OCR</strong> because the PDF is an image. Check any mismatch against the PDF before acting on it.';
+      if (data.ocrSnapped && data.ocrSnapped.length) {
+        html += ' Corrected likely misreads: ' + data.ocrSnapped.map(x => `${x.read} → ${x.adopted}`).join(', ') + '.';
+      }
+      html += '</p>';
+    }
+    html += `<div class="summary">
       <div class="stat"><strong>${data.itemsInQuote}</strong><span>in quote</span></div>
       <div class="stat"><strong>${data.skusLocked}</strong><span>locked</span></div>
       <div class="stat"><strong>${data.mismatchCount}</strong><span>mismatch${data.mismatchCount === 1 ? '' : 'es'}</span></div>
