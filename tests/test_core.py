@@ -214,7 +214,33 @@ class OcrQuote(unittest.TestCase):
         got = _parsers.parse_ocr_quote_text(self._text())
         self.assertEqual([(i['sku'], i['quantity']) for i in got],
                          [('SWQ96', 1), ('MC65EN', 1), ('SWQ20', 1), ('SWQ13', 1), ('MCP08', 1), ('CP170', 1),
-                          ('CP129', 1), ('SWGO04EN', 1), ('DOW910251', 1), ('ODGTTS0101EN', 1), ('SWQ28', 1)])
+                          ('CP129', 1), ('SWGO04EN', 1), ('DOW910251', 1), ('ODGTTS0101EN', 1), ('SWQ28', 1),
+                          ('CP270', 1), ('LIBTLBOO1EN', 1), ('LIBTLOZEN', 1)])
+        # wrapped SKUs: 'ODGTTS010'+'1EN' and 'LIBTLBOO1'+'EN' are joined, not added to the description
+        self.assertEqual(got[-2]['description'], '~=Harmonies Pulse')
+
+    def test_real_quote_misreads_snap_to_locked_skus(self):
+        import _parsers
+        got = _parsers.parse_ocr_quote_text(self._text())
+        quoted = {i['sku']: i['quantity'] for i in got}
+        locked = {k: {} for k in ('SWG04EN', 'MCP08', 'LIBTLBO01EN', 'LIBTL02EN', 'CP270', 'SWQ28', 'SWQ20')}
+        out, snapped = c.snap_ocr_skus(quoted, locked)
+        self.assertEqual({x['adopted'] for x in snapped}, {'SWG04EN', 'LIBTLBO01EN', 'LIBTL02EN'})
+        self.assertEqual(out['LIBTLBO01EN'], 1)
+        self.assertEqual(out['LIBTL02EN'], 1)
+
+    def test_ocr_reads_every_page_of_a_multi_page_quote(self):
+        import _parsers
+        page2 = ('Sales Quote\nS-QU29065\nPage 2/4\nCustomer No: C207962\nUSA\nNo. Description MSRP Quantity Unit Unit Price Line Amount\n'
+                 'LIBTLBO01EN Harmonies Pulse 24.99 1 Each 14.99 14.99\n'
+                 'LIBTL02EN Harmonies Crescendo 34.99 1 Each 20.99 20.99\n'
+                 'Total $ 35.98\nHome Page Phone No. Email\n')
+        got = _parsers.parse_ocr_quote_text(self._text() + '\n' + page2)
+        skus = [i['sku'] for i in got]
+        self.assertEqual(len(got), 16)
+        self.assertIn('LIBTLBO01EN', skus)
+        self.assertIn('LIBTL02EN', skus)
+        self.assertEqual(got[-1]['description'], 'Harmonies Crescendo')
 
     def test_snap_fixes_ocr_misreads_but_not_real_neighbours(self):
         locked = {'SWG04EN': {}, 'SWQ20': {}, 'SWQ28': {}, 'ODGTTS0101EN': {}}

@@ -51,8 +51,7 @@ def parse_asmodee_sales_quote(file_bytes):
                 row_text = ' '.join(w['text'] for w in row_words)
                 stripped = row_text.strip()
                 if stripped.startswith('Total') and '$' in stripped:
-                    hit_total = True
-                    break
+                    continue                      # page total; later pages still carry line items
                 if stripped.startswith('No.') and 'Description' in stripped:
                     header_seen = True
                     continue
@@ -100,17 +99,22 @@ def pdf_has_text(file_bytes):
 
 _OCR_ROW = re.compile(r'^(?P<sku>[A-Za-z0-9][A-Za-z0-9\-]*)\s+(?P<desc>.+?)\s+(?P<msrp>\d+\.\d\d)\s+(?P<qty>\d+)\s+Each\b')
 _OCR_SKU_TAIL = re.compile(r'^[A-Z0-9]{1,6}$')
+_OCR_LANG_TAILS = {'EN', 'ENG', 'FR', 'DE', 'ES', 'NA', 'US'}
+_OCR_PAGE = re.compile(r'\bPage\s*\d+\s*/\s*\d+')
 
 
 def parse_ocr_quote_text(text):
     """Parses OCR text of an Asmodee Sales Quote (the browser OCRs image-only PDFs and
     sends the text). Same output shape as parse_asmodee_sales_quote. A SKU that wraps onto
-    its own line (e.g. 'ODGTTS010' / '1EN') is a short alphanumeric token containing a digit;
-    wrapped description words ('Pack', 'Man') have none."""
+    its own line (e.g. 'ODGTTS010' / '1EN', 'LIBTLBOO1' / 'EN') is a short all-caps token on a SKU of
+    8+ characters that contains a digit or is a language suffix; wrapped description words ('Pack', 'Man') are not."""
     items, current, in_table = [], None, False
     for raw in (text or '').splitlines():
         line = raw.strip()
         if not line:
+            continue
+        if line.startswith('Sales Quote') or _OCR_PAGE.search(line):
+            in_table, current = False, None        # a new page: skip its address block until the table header
             continue
         if line.startswith('No.') and 'Description' in line:
             in_table = True
@@ -118,7 +122,8 @@ def parse_ocr_quote_text(text):
         if not in_table:
             continue
         if line.startswith('Total') and '$' in line:
-            break
+            current = None                          # page total; later pages still carry line items
+            continue
         if line.startswith('Home Page') or line.startswith('www.') or 'customerservice@' in line:
             continue
         m = _OCR_ROW.match(line)
@@ -126,7 +131,7 @@ def parse_ocr_quote_text(text):
             current = {'sku': m.group('sku'), 'description': m.group('desc'), 'quantity': int(m.group('qty'))}
             items.append(current)
         elif current is not None:
-            if _OCR_SKU_TAIL.match(line) and any(ch.isdigit() for ch in line):
+            if _OCR_SKU_TAIL.match(line) and len(current['sku']) >= 8 and (any(ch.isdigit() for ch in line) or line in _OCR_LANG_TAILS):
                 current['sku'] += line
             else:
                 current['description'] = (current['description'] + ' ' + line).strip()
