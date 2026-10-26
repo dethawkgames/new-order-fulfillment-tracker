@@ -467,18 +467,30 @@ def verify_quote(store, quote_items, ocr=False):
     snapped = []
     if ocr:
         quoted, snapped = snap_ocr_skus(quoted, locked)
-    mism = []
+    titles = {}
+    for r in block:
+        titles.setdefault(str(r[C_SKU]).strip(), str(r[7]))
+    qdesc = {}
+    for it in quote_items:
+        qdesc.setdefault(str(it.get('sku') or '').strip(), it.get('description', ''))
+    lines, mism = [], []
     for sku in sorted(set(locked) | set(quoted)):
         l = locked.get(sku, {}).get('qty', 0)
         q = quoted.get(sku, 0)
-        if l == q:
-            continue
-        issue = ('Locked but missing from quote' if q == 0 else
-                 'In quote but not locked' if l == 0 else 'Quantity mismatch')
-        mism.append({'sku': sku, 'issue': issue, 'lockedQty': l, 'quotedQty': q,
-                     'orderNames': ', '.join(locked.get(sku, {}).get('orders', []))})
+        status = ('Match' if l == q else
+                  'Locked but missing from quote' if q == 0 else
+                  'In quote but not locked' if l == 0 else 'Quantity mismatch')
+        row = {'sku': sku, 'issue': status, 'status': status, 'lockedQty': l, 'quotedQty': q,
+               'title': titles.get(sku) or qdesc.get(sku, ''),
+               'orderNames': ', '.join(locked.get(sku, {}).get('orders', []))}
+        lines.append(row)
+        if status != 'Match':
+            mism.append(row)
+    order = {'Quantity mismatch': 0, 'Locked but missing from quote': 1, 'In quote but not locked': 2, 'Match': 3}
+    lines.sort(key=lambda x: (order[x['status']], x['sku']))
     return {
         'success': True, 'itemsInQuote': len(quote_items), 'skusLocked': len(locked),
+        'matchCount': len(lines) - len(mism), 'lines': lines,
         'mismatchCount': len(mism), 'clean': not mism, 'mismatches': mism,
         'comparedAgainstSupplierOrderId': f'the {lock_date} lock (through order #{latest})',
         'source': 'ocr' if ocr else 'text', 'ocrSnapped': snapped,

@@ -199,6 +199,9 @@ class Quote(unittest.TestCase):
         self.assertEqual(sorted((m['sku'], m['issue']) for m in out['mismatches']),
                          [('HAND', 'Quantity mismatch'), ('ZZ', 'In quote but not locked')])
         self.assertIn('6020', out['comparedAgainstSupplierOrderId'])
+        by = {l['sku']: l['status'] for l in out['lines']}
+        self.assertEqual(by['A2'], 'Match')
+        self.assertEqual(out['matchCount'], len(out['lines']) - len(out['mismatches']))
 
 
 class OcrQuote(unittest.TestCase):

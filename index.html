@@ -710,25 +710,28 @@ uploadBtn.addEventListener('click', async () => {
     html += `<div class="summary">
       <div class="stat"><strong>${data.itemsInQuote}</strong><span>in quote</span></div>
       <div class="stat"><strong>${data.skusLocked}</strong><span>locked</span></div>
+      <div class="stat"><strong>${data.matchCount}</strong><span>match${data.matchCount === 1 ? '' : 'es'}</span></div>
       <div class="stat"><strong>${data.mismatchCount}</strong><span>mismatch${data.mismatchCount === 1 ? '' : 'es'}</span></div>
     </div>`;
 
     if (data.clean) {
       html += `<p class="footnote">Everything on the quote matches what was locked under <strong>${data.comparedAgainstSupplierOrderId}</strong>. Safe to approve.</p>`;
-    } else {
-      html += '<table><thead><tr><th>SKU</th><th>Issue</th><th>Locked Qty</th><th>Quoted Qty</th><th>Order(s)</th></tr></thead><tbody>';
-      for (const m of data.mismatches) {
-        html += `<tr>
-          <td>${m.sku}</td>
-          <td class="status-missing">${m.issue}</td>
-          <td>${m.lockedQty}</td>
-          <td>${m.quotedQty}</td>
-          <td>${m.orderNames || '—'}</td>
-        </tr>`;
-      }
-      html += '</tbody></table>';
-      html += `<p class="footnote">Compared against Supplier Order ID <strong>${data.comparedAgainstSupplierOrderId}</strong>.</p>`;
     }
+    const cls = (st) => st === 'Match' ? 'status-match' : st === 'Quantity mismatch' ? 'status-less'
+      : st === 'In quote but not locked' ? 'status-unexpected' : 'status-missing';
+    html += '<table><thead><tr><th>SKU</th><th>Title</th><th>Status</th><th>Locked Qty</th><th>Quoted Qty</th><th>Order(s)</th></tr></thead><tbody>';
+    for (const m of data.lines) {
+      html += `<tr>
+        <td>${m.sku}</td>
+        <td>${m.title || ''}</td>
+        <td class="${cls(m.status)}">${m.status === 'Match' ? 'Match' : m.status}</td>
+        <td>${m.lockedQty}</td>
+        <td>${m.quotedQty}</td>
+        <td>${m.orderNames || '—'}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    html += `<p class="footnote">Compared against Supplier Order ID <strong>${data.comparedAgainstSupplierOrderId}</strong>. Mismatches are listed first.</p>`;
 
     resultDiv.innerHTML = html;
   } catch (err) {
