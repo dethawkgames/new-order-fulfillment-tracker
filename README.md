@@ -13,7 +13,7 @@ close-cycle ──► Order placed ──(shipping invoice)──► Shipped fro
 
 | Upload | Moves units | Notes |
 |---|---|---|
-| Verify Asmodee Quote | nothing (read only) | compares the quote with the most recent locked Asmodee cycle (all three tabs) |
+| Verify Asmodee Quote | nothing (read only; optional one-click backorder marking) | compares the quote with the most recent locked Asmodee cycle (all three tabs) |
 | Asmodee Invoice (PDF) | Order placed → Shipped | matched by SKU; a Sales Quote PDF is auto-detected too |
 | Asmodee Arrival Invoice | Shipped → Order received | |
 | Universal Dist Invoice(s) (.xlsx, several allowed) | Order placed → Shipped | barcode first, then SKU |
@@ -64,6 +64,34 @@ invoice and arrival cards, Box Size, Picking Lists, Order Check. Removed: Record
 Identify Surplus, Order Pipeline. Picking Lists' "backorder" flag and Order Check read the
 `Order Lines` tab instead of Order Needs; Order Check only flags a mismatch for SKUs that have a
 recorded line (in-stock and untagged items have none).
+
+## Backorders & preorders
+
+The **Backorders** card lists what customers have ordered that the supplier hasn't shipped, for orders that
+are still open. It is **derived each time** from `Order placed`, `Order Lines` and live Shopify, so there is no
+second list to keep in sync.
+
+A unit is listed when `Ordered - Shipped > 0` on its `Order Lines` row and either
+
+- its lock is **older than the newest lock** (still unshipped a cycle later), or
+- its `Order placed` row was **marked** at a quote check (column K, header `Backorder Since`).
+
+Shopify then removes cancelled and fulfilled orders and caps each line at what the order still has
+unfulfilled and un-refunded. Product tags give the type (`preorder` tag = Preorder) and the release date
+(`release-date-YYYY-MM-DD`).
+
+**Marking:** after a quote check, if locked items are missing from the quote, a button marks them (writes only the
+`Backorder Since` cell on that lock's `Order placed` rows; an existing date is kept). Items that later appear on
+a quote are cleared the same way. The quote check itself stays read-only.
+
+**Quote check statuses:** `Match`; `Backorder released` (quote is larger than the lock by units still owed from
+earlier locks); `Not quoted (marked backorder/preorder)` (expected); and the three that need review:
+`Locked but missing from quote`, `In quote but not locked`, `Quantity mismatch`.
+
+**Mark Shipped / Received:** unchanged mechanics (units move oldest lock first, so a released backorder leaves
+`Order placed` and lands in `Shipped from supplier` with this invoice and date). The result now also lists
+**Filled backorders/preorders**: units that came from an earlier lock or a marked row. Quantities are never
+moved twice, and marks on rows that ship simply go with the row.
 
 ## Deploy
 

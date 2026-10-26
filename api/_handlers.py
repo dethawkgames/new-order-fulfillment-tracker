@@ -131,6 +131,15 @@ def _now():
     return datetime.now(timezone.utc)
 
 
+def _backorders_for_quote(store):
+    """The backorder list for the quote check; None if it can't be built (the check still runs)."""
+    import _tio as _io
+    try:
+        return core.backorder_list(store, _io.Shopify(), supplier='Asmodee')['items']
+    except Exception:
+        return None
+
+
 def run_verify(files, fields):
     import _tio as _io
     import _parsers
@@ -139,7 +148,8 @@ def run_verify(files, fields):
         quote = _parsers.parse_ocr_quote_text(ocr_text)
         if not quote:
             return 200, {'warning': 'OCR could not find any line items on this quote. Try a clearer copy, or the original PDF from Asmodee.'}
-        return 200, core.verify_quote(_io.SheetsStore(), quote, ocr=True)
+        store = _io.SheetsStore()
+        return 200, core.verify_quote(store, quote, ocr=True, backorders=_backorders_for_quote(store))
     if not files:
         return 400, {'error': 'No file found in upload'}
     data = files[0][1]
@@ -148,7 +158,19 @@ def run_verify(files, fields):
     quote = _parsers.parse_asmodee_quote(data)
     if not quote:
         return 200, {'warning': 'No line items could be read from this PDF, so nothing was compared. Check it is an Asmodee Sales Quote.'}
-    return 200, core.verify_quote(_io.SheetsStore(), quote)
+    store = _io.SheetsStore()
+    return 200, core.verify_quote(store, quote, backorders=_backorders_for_quote(store))
+
+
+def run_backorders(fields):
+    """action=list (default): the backorder/preorder list. action=mark: mark/clear SKUs on the newest lock."""
+    import _tio as _io
+    store = _io.SheetsStore()
+    if (fields.get('action') or 'list') == 'mark':
+        skus = json.loads(fields.get('skus') or '[]')
+        clear = json.loads(fields.get('clear') or '[]')
+        return 200, core.mark_backorders(store, skus=skus, clear=clear)
+    return 200, core.backorder_list(store, _io.Shopify(), supplier=(fields.get('supplier') or '').strip() or None)
 
 
 def _cors(h):
@@ -182,6 +204,8 @@ def handle_post(h, kind, stage=None):
         files, fields = parse_multipart(ctype, body)
         if kind == 'verify':
             status, data = run_verify(files, fields)
+        elif kind == 'backorders':
+            status, data = run_backorders(fields)
         else:
             status, data = run_upload(kind, stage, files, fields)
         _send(h, status, data)

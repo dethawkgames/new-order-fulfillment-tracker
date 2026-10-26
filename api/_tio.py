@@ -60,6 +60,13 @@ class SheetsStore:
             _sheets('POST', f"{self.id}/values/{urllib.parse.quote(f'{chr(39)}{tab}{chr(39)}!A1')}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS",
                     {'values': rows})
 
+    def update_cells(self, tab, updates):
+        """Write individual cells: updates = {'K12': value, ...}. Touches nothing else."""
+        if updates:
+            _sheets('POST', f'{self.id}/values:batchUpdate', {
+                'valueInputOption': 'RAW',
+                'data': [{'range': f"'{tab}'!{a1}", 'values': [[v]]} for a1, v in updates.items()]})
+
     def replace_body(self, tab, rows):
         """Write the new body first, then blank whatever is left below it, so an
         interruption can only leave stale rows, never lose data."""
@@ -99,7 +106,7 @@ class Shopify:
             q = ' OR '.join(f'name:{n}' for n in nums[i:i + 25])
             d = self.gql('''query($q: String!) { orders(first: 50, query: $q) { edges { node {
                 id name tags displayFulfillmentStatus cancelledAt
-                lineItems(first: 50) { edges { node { sku currentQuantity product { tags } } } } } } } }''', {'q': q})
+                lineItems(first: 50) { edges { node { sku title currentQuantity unfulfilledQuantity product { tags } } } } } } } }''', {'q': q})
             for e in d['orders']['edges']:
                 n = e['node']
                 out[n['name']] = {'id': n['id'], 'tags': n['tags'], 'fulfillment': n['displayFulfillmentStatus'],

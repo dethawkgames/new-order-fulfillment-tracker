@@ -1,6 +1,7 @@
 {
   "functions": {
     "api/verify-asmodee-quote.py": { "maxDuration": 30 },
+    "api/backorders.py": { "maxDuration": 30 },
     "api/reconcile.py": { "maxDuration": 30 },
     "api/reconcile-ud.py": { "maxDuration": 30 },
     "api/reconcile-acdd.py": { "maxDuration": 30 },

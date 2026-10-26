@@ -388,6 +388,7 @@
 
 <nav class="jump-nav">
   <a href="#card-verify-quote">Verify Quote</a>
+  <a href="#card-backorders">Backorders</a>
   <a href="#card-asmodee-invoice">Asmodee Invoice</a>
   <a href="#card-asmodee-arrived-invoice">Asmodee Arrived</a>
   <a href="#card-ud-invoice">UD Invoice</a>
@@ -417,6 +418,22 @@
     </div>
 
     <div id="result"></div>
+  </div>
+
+  <div class="card" id="card-backorders">
+    <div class="card-top-row">
+      <p class="card-label"><span class="dot"></span>Open Backorders &amp; Preorders</p>
+      <a href="#top" class="back-to-top">↑ Top</a>
+    </div>
+    <h2 class="section-title">Backorders &amp; Preorders</h2>
+    <p class="section-desc">Units customers have ordered that the supplier hasn't shipped, for orders that are still open (cancelled, refunded and already-fulfilled units are dropped using live Shopify data). An item appears here when its lock is older than the newest one and it still hasn't shipped, or when you marked it as a backorder/preorder after a quote check. Nothing is stored separately: this is built from Order placed, Order Lines and Shopify each time, so it can't drift. When an invoice ships these units they move out of Order placed to Shipped from supplier as usual and the upload result lists them.</p>
+    <label class="dry-run-toggle">Supplier
+      <select id="boSupplier"><option value="">All</option><option>Asmodee</option><option>Universal Dist</option><option>ACDD</option></select>
+    </label>
+    <div class="upload-zone" style="padding:14px">
+      <button id="boRefreshBtn">Load Backorder List</button>
+    </div>
+    <div id="boResult"></div>
   </div>
 
   <div class="card" id="card-asmodee-invoice">
@@ -707,33 +724,69 @@ uploadBtn.addEventListener('click', async () => {
       }
       html += '</p>';
     }
+    if (data.backorderListChecked === false) {
+      html += '<p class="footnote" style="color:#b3392b">The backorder list could not be loaded, so released backorders may show as mismatches.</p>';
+    }
     html += `<div class="summary">
       <div class="stat"><strong>${data.itemsInQuote}</strong><span>in quote</span></div>
       <div class="stat"><strong>${data.skusLocked}</strong><span>locked</span></div>
       <div class="stat"><strong>${data.matchCount}</strong><span>match${data.matchCount === 1 ? '' : 'es'}</span></div>
-      <div class="stat"><strong>${data.mismatchCount}</strong><span>mismatch${data.mismatchCount === 1 ? '' : 'es'}</span></div>
+      <div class="stat"><strong>${data.releasedCount + data.markedCount}</strong><span>backorder/preorder</span></div>
+      <div class="stat"><strong>${data.mismatchCount}</strong><span>to review</span></div>
     </div>`;
 
     if (data.clean) {
-      html += `<p class="footnote">Everything on the quote matches what was locked under <strong>${data.comparedAgainstSupplierOrderId}</strong>. Safe to approve.</p>`;
+      html += `<p class="footnote">Everything on the quote is accounted for against <strong>${data.comparedAgainstSupplierOrderId}</strong> (matches, released backorders, and items already marked as backorder/preorder). Safe to approve.</p>`;
     }
     const cls = (st) => st === 'Match' ? 'status-match' : st === 'Quantity mismatch' ? 'status-less'
-      : st === 'In quote but not locked' ? 'status-unexpected' : 'status-missing';
-    html += '<table><thead><tr><th>SKU</th><th>Title</th><th>Status</th><th>Locked Qty</th><th>Quoted Qty</th><th>Order(s)</th></tr></thead><tbody>';
+      : st === 'In quote but not locked' ? 'status-unexpected'
+      : (st === 'Backorder released' || st.startsWith('Not quoted')) ? 'status-preorder' : 'status-missing';
+    html += '<table><thead><tr><th>SKU</th><th>Title</th><th>Status</th><th>Locked Qty</th><th>Quoted Qty</th><th>Owed from earlier</th><th>Order(s)</th></tr></thead><tbody>';
     for (const m of data.lines) {
       html += `<tr>
         <td>${m.sku}</td>
         <td>${m.title || ''}</td>
-        <td class="${cls(m.status)}">${m.status === 'Match' ? 'Match' : m.status}</td>
+        <td class="${cls(m.status)}">${m.status}</td>
         <td>${m.lockedQty}</td>
         <td>${m.quotedQty}</td>
+        <td>${m.backorderOwed || '—'}</td>
         <td>${m.orderNames || '—'}</td>
       </tr>`;
     }
     html += '</tbody></table>';
-    html += `<p class="footnote">Compared against Supplier Order ID <strong>${data.comparedAgainstSupplierOrderId}</strong>. Mismatches are listed first.</p>`;
+    html += `<p class="footnote">Compared against Supplier Order ID <strong>${data.comparedAgainstSupplierOrderId}</strong>. Items to review are listed first. "Owed from earlier" is units still owed from older locks on the backorder list.</p>`;
+
+    const nMark = (data.toMark || []).length, nClear = (data.toClear || []).length;
+    if (nMark || nClear) {
+      html += '<div style="margin-top:14px">';
+      if (nMark) html += `<p class="footnote">${nMark} locked item${nMark === 1 ? ' is' : 's are'} missing from this quote. If the quote is final, mark ${nMark === 1 ? 'it' : 'them'} as backorder/preorder so they are tracked on the Backorders list and expected on later quote checks.</p>`;
+      if (nClear) html += `<p class="footnote">${nClear} item${nClear === 1 ? '' : 's'} previously marked as backorder/preorder ${nClear === 1 ? 'is' : 'are'} on this quote, so the mark will be cleared.</p>`;
+      html += `<button id="markBackordersBtn">${nMark ? `Mark ${nMark} as backorder/preorder` : 'Clear marks'}${nMark && nClear ? ` and clear ${nClear}` : ''}</button> <span id="markBackordersMsg" class="footnote"></span></div>`;
+    }
 
     resultDiv.innerHTML = html;
+    const markBtn = document.getElementById('markBackordersBtn');
+    if (markBtn) {
+      markBtn.addEventListener('click', async () => {
+        markBtn.disabled = true;
+        const msg = document.getElementById('markBackordersMsg');
+        msg.textContent = 'Saving...';
+        try {
+          const fd = new FormData();
+          fd.append('action', 'mark');
+          fd.append('skus', JSON.stringify(data.toMark || []));
+          fd.append('clear', JSON.stringify(data.toClear || []));
+          const r = await fetch('/api/backorders', { method: 'POST', body: fd });
+          const out = await r.json();
+          if (!r.ok || out.error) throw new Error(out.error || 'Unknown error');
+          if (out.warning) throw new Error(out.warning);
+          msg.textContent = `Marked ${out.marked.length}, cleared ${out.cleared.length} (Order placed → "Backorder Since" column). Re-run the check to see the new statuses.`;
+        } catch (e) {
+          msg.textContent = 'Could not save: ' + e.message;
+          markBtn.disabled = false;
+        }
+      });
+    }
   } catch (err) {
     resultDiv.innerHTML = `<div class="error">Request failed: ${err.message}</div>`;
   }
@@ -837,8 +890,55 @@ function shippedExtras(data) {
     h += `<p class="footnote" style="color:#b3392b">Tagging problems (sheets were still updated): ${data.tagErrors.map(e => `${e.order}: ${e.error}`).join('; ')}</p>`;
   }
   if (data.note) h += `<p class="footnote">${data.note}</p>`;
-  return h;
+  return backordersFilledHtml(data) + h;
 }
+
+function backordersFilledHtml(data) {
+  const f = data.backordersFilled || [];
+  if (!f.length) return '';
+  let h = `<p class="footnote" style="font-weight:600">${data.dryRun ? 'Would fill' : 'Filled'} backorders/preorders: ${f.reduce((n, x) => n + x.units, 0)} unit(s) from earlier locks or marked items</p>`;
+  h += '<table><thead><tr><th>SKU</th><th>Title</th><th>Units</th><th>From lock(s)</th><th>Order(s)</th></tr></thead><tbody>';
+  for (const x of f) h += `<tr><td>${x.sku}</td><td>${x.title || ''}</td><td>${x.units}</td><td>${x.locks.join(', ')}</td><td>${x.orders.join(', ') || '—'}</td></tr>`;
+  return h + '</tbody></table>';
+}
+
+const boRefreshBtn = document.getElementById('boRefreshBtn');
+boRefreshBtn.addEventListener('click', async () => {
+  const out = document.getElementById('boResult');
+  boRefreshBtn.disabled = true;
+  out.innerHTML = '<p class="loading">Building the list from Order placed, Order Lines and live Shopify...</p>';
+  try {
+    const fd = new FormData();
+    fd.append('action', 'list');
+    fd.append('supplier', document.getElementById('boSupplier').value);
+    const res = await fetch('/api/backorders', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'Unknown error');
+    let html = `<div class="summary">
+      <div class="stat"><strong>${data.unitsOwed}</strong><span>units owed</span></div>
+      <div class="stat"><strong>${data.skus}</strong><span>SKUs</span></div>
+      <div class="stat"><strong>${data.ordersAffected}</strong><span>open orders</span></div>
+    </div>`;
+    if (!data.shopifyChecked) html += '<p class="footnote" style="color:#b3392b">Shopify could not be checked, so cancelled/refunded/fulfilled orders were not removed.</p>';
+    if (data.unverifiedOrders.length) html += `<p class="footnote">Not found in Shopify (kept in the list): ${data.unverifiedOrders.join(', ')}</p>`;
+    if (!data.items.length) {
+      html += '<p class="footnote">Nothing is currently on backorder or preorder.</p>';
+    } else {
+      html += '<table><thead><tr><th>Supplier</th><th>SKU</th><th>Title</th><th>Qty owed</th><th>Type</th><th>Release</th><th>Since lock</th><th>Why listed</th><th>Order(s)</th></tr></thead><tbody>';
+      for (const g of data.items) {
+        const orders = g.orders.map(o => g.orders.length > 1 && o.qty > 1 ? `${o.order} ×${o.qty}` : o.order).join(', ');
+        html += `<tr><td>${g.supplier}</td><td>${g.sku}</td><td>${g.title || ''}</td><td>${g.qty}</td>
+          <td class="${g.kind === 'Preorder' ? 'status-preorder' : 'status-missing'}">${g.kind}</td><td>${g.releaseDate || '—'}</td>
+          <td>${g.since}</td><td>${g.origin}${g.markedOn ? ' (' + g.markedOn + ')' : ''}</td><td>${orders}</td></tr>`;
+      }
+      html += '</tbody></table>';
+    }
+    out.innerHTML = html;
+  } catch (err) {
+    out.innerHTML = `<div class="error">Request failed: ${err.message}</div>`;
+  }
+  boRefreshBtn.disabled = false;
+});
 
 function renderInvoiceTable(rows) {
   if (!rows.length) return '<p class="footnote">Nothing here.</p>';
@@ -1070,7 +1170,7 @@ asmArrivedUploadBtn.addEventListener('click', async () => {
     }
     html += `<p class="footnote">${data.note}</p>`;
 
-    asmArrivedResultDiv.innerHTML = html;
+    asmArrivedResultDiv.innerHTML = backordersFilledHtml(data) + html;
   } catch (err) {
     asmArrivedResultDiv.innerHTML = `<div class="error">Request failed: ${err.message}</div>`;
   }
@@ -1181,7 +1281,7 @@ udArrivedUploadBtn.addEventListener('click', async () => {
     }
     html += `<p class="footnote">${data.note}</p>`;
 
-    udArrivedResultDiv.innerHTML = html;
+    udArrivedResultDiv.innerHTML = backordersFilledHtml(data) + html;
   } catch (err) {
     udArrivedResultDiv.innerHTML = `<div class="error">Request failed: ${err.message}</div>`;
   }
@@ -1381,7 +1481,7 @@ acddArrivedUploadBtn.addEventListener('click', async () => {
     }
     html += `<p class="footnote">${data.note}</p>`;
 
-    acddArrivedResultDiv.innerHTML = html;
+    acddArrivedResultDiv.innerHTML = backordersFilledHtml(data) + html;
   } catch (err) {
     acddArrivedResultDiv.innerHTML = `<div class="error">Request failed: ${err.message}</div>`;
   }

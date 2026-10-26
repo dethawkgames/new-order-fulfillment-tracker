@@ -21,6 +21,14 @@ class Store:
     def get(self, tab): return [list(r) for r in self.t[tab]]
     def append(self, tab, rows): self.t[tab] += [list(r) for r in rows]
     def replace_body(self, tab, rows): self.t[tab] = [self.t[tab][0]] + [list(r) for r in rows]
+    def update_cells(self, tab, updates):
+        import re as _re
+        for a1, v in updates.items():
+            col, row = _re.match(r'([A-Z]+)(\d+)$', a1).groups()
+            ci = sum((ord(ch) - 64) * 26 ** i for i, ch in enumerate(reversed(col))) - 1
+            r = self.t[tab][int(row) - 1]
+            r += [''] * (ci + 1 - len(r))
+            r[ci] = v
     def body(self, tab): return self.t[tab][1:]
 
 
@@ -35,7 +43,8 @@ class Shop:
 def order(name, lines, tags=None, cancelled=False, fulfillment='UNFULFILLED'):
     return {'id': 'gid://' + name, 'tags': list(tags or ['dhg-status-order-placed', 'dhg-status-order-supplier']),
             'fulfillment': fulfillment, 'cancelled': cancelled,
-            'lines': [{'sku': s, 'currentQuantity': q, 'product': {'tags': t}} for s, q, t in lines]}
+            'lines': [{'sku': s, 'currentQuantity': q, 'unfulfilledQuantity': q, 'title': s + ' title', 'product': {'tags': t}}
+                      for s, q, t in lines]}
 
 
 def placed(lock, last, sup, sku, qty, orders, acdd=''):
@@ -202,6 +211,81 @@ class Quote(unittest.TestCase):
         by = {l['sku']: l['status'] for l in out['lines']}
         self.assertEqual(by['A2'], 'Match')
         self.assertEqual(out['matchCount'], len(out['lines']) - len(out['mismatches']))
+
+
+class Backorders(unittest.TestCase):
+    """seed(): Oct 6 lock (6007) A1 x2 for #6001; Oct 13 lock (6020) is the newest."""
+
+    def setUp(self):
+        self.s = Store(); seed(self.s)
+        self.shop = Shop({
+            '#6001': order('#6001', [('A1', 2, ['preorder', 'release-date-2026-12-01'])]),
+            '#6010': order('#6010', [('A1', 2, []), ('A2', 1, []), ('U1', 2, [])]),
+            '#6011': order('#6011', [('A1', 1, [])]),
+        })
+
+    def test_earlier_lock_unshipped_is_listed_with_release_date(self):
+        out = c.backorder_list(self.s, self.shop)
+        by = {(g['supplier'], g['sku']): g for g in out['items']}
+        self.assertEqual(list(by), [('Asmodee', 'A1')])          # newest lock's lines are not backorders unless marked
+        g = by[('Asmodee', 'A1')]
+        self.assertEqual((g['qty'], g['carried'], g['orderNames'], g['kind'], g['releaseDate']),
+                         (2, 2, '#6001', 'Preorder', '2026-12-01'))
+        self.assertTrue(out['shopifyChecked'])
+
+    def test_cancelled_fulfilled_and_refunded_are_dropped(self):
+        self.shop.orders['#6001']['cancelled'] = True
+        self.assertEqual(c.backorder_list(self.s, self.shop)['items'], [])
+        self.shop.orders['#6001']['cancelled'] = False
+        self.shop.orders['#6001']['lines'][0]['currentQuantity'] = 1       # one unit refunded
+        self.shop.orders['#6001']['lines'][0]['unfulfilledQuantity'] = 1
+        self.assertEqual(c.backorder_list(self.s, self.shop)['items'][0]['qty'], 1)
+        self.shop.orders['#6001']['fulfillment'] = 'FULFILLED'
+        self.assertEqual(c.backorder_list(self.s, self.shop)['items'], [])
+
+    def test_mark_adds_newest_lock_items_and_is_idempotent(self):
+        r = c.mark_backorders(self.s, skus=['A2', 'NOPE'], today='2026-10-26')
+        self.assertEqual((r['marked'], r['notOnOrderPlaced']), (['A2'], ['NOPE']))
+        self.assertEqual(self.s.t[c.TAB_PLACED][0][10], 'Backorder Since')
+        a2 = next(x for x in self.s.body(c.TAB_PLACED) if x[3] == 'A2')
+        self.assertEqual(a2[10], '2026-10-26')
+        c.mark_backorders(self.s, skus=['A2'], today='2026-11-02')           # keeps the first date
+        self.assertEqual(next(x for x in self.s.body(c.TAB_PLACED) if x[3] == 'A2')[10], '2026-10-26')
+        got = {g['sku']: g for g in c.backorder_list(self.s, self.shop)['items']}
+        self.assertEqual((got['A2']['markedNow'], got['A2']['origin'], got['A2']['markedOn']),
+                         (1, 'Marked at quote check', '2026-10-26'))
+        c.mark_backorders(self.s, skus=[], clear=['A2'])
+        self.assertNotIn('A2', {g['sku']: g for g in c.backorder_list(self.s, self.shop)['items']})
+
+    def test_quote_uses_list_for_released_and_marked(self):
+        c.mark_backorders(self.s, skus=['A2'], today='2026-10-26')
+        bo = c.backorder_list(self.s, self.shop, supplier='Asmodee')['items']
+        # newest lock: A1 x3, A2 x1 (marked), HAND x4. 2 more A1 are owed from the Oct 6 lock.
+        q = [{'sku': 'A1', 'quantity': 5}, {'sku': 'HAND', 'quantity': 4}]
+        out = c.verify_quote(self.s, q, backorders=bo)
+        st = {l['sku']: l['status'] for l in out['lines']}
+        self.assertEqual(st, {'A1': c.ST_Q_RELEASED, 'A2': c.ST_Q_MARKED, 'HAND': c.ST_Q_MATCH})
+        self.assertTrue(out['clean'])
+        self.assertEqual((out['releasedCount'], out['markedCount'], out['toMark']), (1, 1, []))
+        # without the list the same quote is flagged
+        out2 = c.verify_quote(self.s, q)
+        self.assertEqual({l['sku']: l['status'] for l in out2['lines']}['A1'], c.ST_Q_QTY)
+
+    def test_quote_offers_to_mark_missing_and_clear_when_quoted(self):
+        out = c.verify_quote(self.s, [{'sku': 'A1', 'quantity': 3}, {'sku': 'HAND', 'quantity': 4}])
+        self.assertEqual(out['toMark'], ['A2'])
+        c.mark_backorders(self.s, skus=['A2'], today='2026-10-26')
+        out = c.verify_quote(self.s, [{'sku': 'A1', 'quantity': 3}, {'sku': 'A2', 'quantity': 1}, {'sku': 'HAND', 'quantity': 4}])
+        self.assertEqual((out['toMark'], out['toClear']), ([], ['A2']))
+
+    def test_shipment_reports_backorders_it_fills(self):
+        c.mark_backorders(self.s, skus=['A2'], today='2026-10-26')
+        r = run(self.s, self.shop, 'shipped', 'Asmodee', items(('A1', 3), ('A2', 1)))
+        filled = {f['sku']: f for f in r['backordersFilled']}
+        self.assertEqual((filled['A1']['units'], filled['A1']['locks'], filled['A1']['orders']), (2, ['2026-10-06'], ['#6001']))
+        self.assertEqual(filled['A2']['units'], 1)                             # marked in the newest lock
+        shipped = {x[3] for x in self.s.body(c.TAB_SHIPPED)}
+        self.assertEqual(shipped, {'A1', 'A2'})                                # moved to Shipped from supplier as usual
 
 
 class OcrQuote(unittest.TestCase):

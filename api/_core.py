@@ -26,6 +26,11 @@ TAB_INVOICES = 'Processed Invoices'
 # Order placed / Shipped / Received share these leading columns.
 C_LOCK, C_LAST, C_SUP, C_SKU, C_ACDD, C_QTY, C_UNIT, C_TITLE, C_ORDERS, C_BINS = range(10)
 C_SHIPPED_ON, C_INVOICE, C_RECEIVED_ON, C_ARRIVAL_INVOICE = 10, 11, 12, 13
+# On Order placed ONLY, column K holds the date a line was marked backorder/preorder (header
+# "Backorder Since"). On Shipped / Received the same column is "Shipped On".
+C_BACKORDER = 10
+BACKORDER_HEADER = 'Backorder Since'
+KIND_PREORDER, KIND_BACKORDER = 'Preorder', 'Backorder'
 
 # Order Lines columns
 L_LOCK, L_LAST, L_ORDER, L_SUP, L_SKU, L_QTY, L_ORDERED, L_SHIPPED, L_RECEIVED = range(9)
@@ -68,6 +73,19 @@ def _int(v):
 def _pad(row, n):
     row = list(row)
     return row + [''] * (n - len(row))
+
+
+def today_et(now=None):
+    now = now or datetime.now(timezone.utc)
+    return now.astimezone(ZoneInfo('America/New_York')).strftime('%Y-%m-%d')
+
+def newest_lock(store):
+    """Highest 'Last Order Submitted' across the three stage tabs (= the most recent lock)."""
+    last = 0
+    for tab in (TAB_PLACED, TAB_SHIPPED, TAB_RECEIVED):
+        for r in store.get(tab)[1:]:
+            last = max(last, _int(_pad(r, 2)[C_LAST]))
+    return last
 
 
 def order_number(name):
@@ -217,6 +235,7 @@ def process_upload(store, shopify, *, stage, supplier, items, group_keys, files,
         results.append(_result_row(None, it, has_barcode_column))
     results.sort(key=lambda r: (str(r[0] or ''), str(r[1] or '')))
     units = sum(t for _, t in moves)
+    filled = backorders_filled(store, src_body, moves, supplier, stage)
 
     # 2. Per-order allocation (Order Lines) and which orders are now complete.
     lines_tab = store.get(TAB_LINES)
@@ -261,6 +280,7 @@ def process_upload(store, shopify, *, stage, supplier, items, group_keys, files,
         'blockedByCancellationOrRefund': [],
         'removedFulfilledOrCancelled': tag_info['gone'],
         'unitsMoved': units,
+        'backordersFilled': filled,
     }
     if stage == 'shipped':
         out['unitsAdvancedToShipped'] = units
@@ -416,7 +436,7 @@ def tag_orders(shopify, lines, touched, stage, dry_run):
     return res
 
 
-# ── Asmodee quote check (read only) ──────────────────────────────────────────
+# ── OCR SKU helpers (image-only quote PDFs) ──────────────────────────────────
 
 _OCR_CONFUSE = str.maketrans({'O': '0', 'I': '1', 'L': '1', 'S': '5', 'B': '8', 'Z': '2'})
 
@@ -441,57 +461,250 @@ def snap_ocr_skus(quoted, locked):
     return out, snapped
 
 
-def verify_quote(store, quote_items, ocr=False):
-    """Compare a Sales Quote with the most recent locked Asmodee cycle. Looks at all
-    three tabs, so it still works after part of the order has shipped."""
+def backorders_filled(store, src_body, moves, supplier, stage):
+    """Units this document moves that belong to an EARLIER lock than the newest one, or that were marked
+    backorder/preorder: i.e. a backorder or preorder being filled. Reported, no extra writes (the normal
+    oldest-lock-first move already takes them out of Order placed and into the shipment's rows)."""
+    if not moves:
+        return []
+    newest = newest_lock(store)
+    out = {}
+    for idx, t in moves:
+        r = src_body[idx]
+        marked = stage == 'shipped' and bool(str(r[C_BACKORDER]).strip())
+        if _int(r[C_LAST]) >= newest and not marked:
+            continue
+        sku = str(r[C_SKU]).strip()
+        g = out.setdefault(sku, {'sku': sku, 'title': str(r[C_TITLE]), 'units': 0, 'locks': [], 'orders': []})
+        g['units'] += t
+        if str(r[C_LOCK]) not in g['locks']:
+            g['locks'].append(str(r[C_LOCK]))
+        for o in parse_order_names(r[C_ORDERS]):
+            if o not in g['orders']:
+                g['orders'].append(o)
+    return sorted(out.values(), key=lambda g: g['sku'])
+
+
+# ── Backorder / preorder list ────────────────────────────────────────────────
+
+def backorder_list(store, shopify=None, supplier=None):
+    """Units customers have ordered that the supplier has not shipped, for orders that are still open.
+
+    Derived, never stored: an Order Lines row (Ordered - Shipped > 0) is listed when it belongs to a lock
+    older than the newest one (still unshipped a cycle later) or its Order placed row was marked at a quote
+    check (column K). Live Shopify then drops cancelled and fulfilled orders and caps each line at what the
+    order still has unfulfilled and un-refunded."""
+    placed = [_pad(r, 14) for r in store.get(TAB_PLACED)[1:]]
+    lines = [_pad(r, 9) for r in store.get(TAB_LINES)[1:]]
+    newest = max([_int(r[C_LAST]) for r in placed] + [_int(l[L_LAST]) for l in lines] + [0])
+    marked, titles = {}, {}
+    for r in placed:
+        sku = str(r[C_SKU]).strip()
+        titles.setdefault((str(r[C_SUP]), sku), str(r[C_TITLE]))
+        if str(r[C_BACKORDER]).strip():
+            marked[(_int(r[C_LAST]), str(r[C_SUP]), sku)] = str(r[C_BACKORDER]).strip()
+    cand = []
+    for l in lines:
+        sup, sku = str(l[L_SUP]), str(l[L_SKU]).strip()
+        if supplier and sup != supplier:
+            continue
+        owed = _int(l[L_ORDERED]) - _int(l[L_SHIPPED])
+        last = _int(l[L_LAST])
+        mk = marked.get((last, sup, sku), '')
+        if owed <= 0 or (last >= newest and not mk):
+            continue
+        cand.append({'line': l, 'owed': owed, 'last': last, 'marked': mk, 'carried': last < newest})
+
+    shop, checked = {}, False
+    if shopify is not None and cand:
+        try:
+            shop = shopify.get_orders(sorted({str(c['line'][L_ORDER]) for c in cand}))
+            checked = True
+        except Exception:
+            shop = {}
+    unverified, groups = set(), {}
+    for c in cand:
+        l, owed = c['line'], c['owed']
+        order, sup, sku = str(l[L_ORDER]), str(l[L_SUP]), str(l[L_SKU]).strip()
+        kind, release, stitle = KIND_BACKORDER, '', ''
+        if checked:
+            d = shop.get(order)
+            if d is None:
+                unverified.add(order)
+            elif d['cancelled'] or d['fulfillment'] == 'FULFILLED':
+                continue
+            else:
+                cap, found = 0, False
+                for li in d['lines']:
+                    if str(li.get('sku') or '').strip() != sku:
+                        continue
+                    found = True
+                    q = li.get('currentQuantity') or 0
+                    u = li.get('unfulfilledQuantity')
+                    cap += q if u is None else min(q, u)
+                    stitle = stitle or str(li.get('title') or '')
+                    tags = (li.get('product') or {}).get('tags') or []
+                    if 'preorder' in [t.lower() for t in tags]:
+                        kind = KIND_PREORDER
+                    for t in tags:
+                        m = RELEASE_DATE_TAG_RE.match(t.strip())
+                        if m and m.group(1) > release:
+                            release = m.group(1)
+                if not found:
+                    continue
+                owed = min(owed, cap)
+        if owed <= 0:
+            continue
+        g = groups.setdefault((sup, sku), {
+            'supplier': sup, 'sku': sku, 'title': '', 'qty': 0, 'carried': 0, 'markedNow': 0, 'orders': [],
+            'since': str(l[L_LOCK]), '_since': c['last'], 'markedOn': '', 'kind': KIND_BACKORDER, 'releaseDate': ''})
+        g['qty'] += owed
+        g['carried' if c['carried'] else 'markedNow'] += owed
+        g['orders'].append({'order': order, 'qty': owed})
+        g['title'] = g['title'] or titles.get((sup, sku), '') or stitle
+        if c['last'] < g['_since']:
+            g['_since'], g['since'] = c['last'], str(l[L_LOCK])
+        if c['marked'] and c['marked'] > g['markedOn']:
+            g['markedOn'] = c['marked']
+        if kind == KIND_PREORDER:
+            g['kind'] = KIND_PREORDER
+        if release > g['releaseDate']:
+            g['releaseDate'] = release
+    items = []
+    for g in groups.values():
+        g.pop('_since')
+        g['orders'].sort(key=lambda o: order_number(o['order']))
+        g['orderNames'] = ', '.join(o['order'] for o in g['orders'])
+        g['origin'] = ' + '.join(x for x, on in (('Carried over from an earlier lock', g['carried']),
+                                                 ('Marked at quote check', g['markedNow'])) if on)
+        items.append(g)
+    items.sort(key=lambda g: (g['supplier'], g['releaseDate'] or '9999', g['sku']))
+    return {'success': True, 'items': items, 'skus': len(items), 'unitsOwed': sum(g['qty'] for g in items),
+            'ordersAffected': len({o['order'] for g in items for o in g['orders']}),
+            'newestLock': newest, 'shopifyChecked': checked, 'unverifiedOrders': sorted(unverified)}
+
+
+def mark_backorders(store, *, skus, clear=(), supplier='Asmodee', today=None):
+    """Set / clear the 'Backorder Since' marker (Order placed column K) on the newest lock's rows for these
+    SKUs. Targeted cell writes only, so rows written meanwhile by close-cycle are never overwritten.
+    A row already marked keeps its original date."""
+    skus, clear = {str(x).strip() for x in skus}, {str(x).strip() for x in clear}
+    tab = store.get(TAB_PLACED)
+    header = _pad(tab[0] if tab else [], 14)
+    body = [_pad(r, 14) for r in tab[1:]]
+    latest = 0
+    for t in (TAB_PLACED, TAB_SHIPPED, TAB_RECEIVED):
+        for r in store.get(t)[1:]:
+            r = _pad(r, 3)
+            if str(r[C_SUP]) == supplier:
+                latest = max(latest, _int(r[C_LAST]))
+    if not latest:
+        return {'warning': 'No locked order was found. Close a cycle first.'}
+    today = today or today_et()
+    updates, marked, cleared, seen = {}, [], [], set()
+    for i, r in enumerate(body):
+        sku = str(r[C_SKU]).strip()
+        if str(r[C_SUP]) != supplier or _int(r[C_LAST]) != latest:
+            continue
+        cell = f'K{i + 2}'
+        if sku in skus and not str(r[C_BACKORDER]).strip():
+            updates[cell] = today
+            marked.append(sku)
+        elif sku in clear and str(r[C_BACKORDER]).strip():
+            updates[cell] = ''
+            cleared.append(sku)
+        if sku in skus or sku in clear:
+            seen.add(sku)
+    if updates and not str(header[C_BACKORDER]).strip():
+        updates['K1'] = BACKORDER_HEADER
+    if updates:
+        store.update_cells(TAB_PLACED, updates)
+    return {'success': True, 'marked': sorted(set(marked)), 'cleared': sorted(set(cleared)),
+            'notOnOrderPlaced': sorted((skus | clear) - seen), 'comparedAgainstLock': latest}
+
+
+# ── Asmodee quote check (read only) ──────────────────────────────────────────
+
+ST_Q_MATCH = 'Match'
+ST_Q_RELEASED = 'Backorder released'
+ST_Q_MARKED = 'Not quoted (marked backorder/preorder)'
+ST_Q_MISSING = 'Locked but missing from quote'
+ST_Q_EXTRA = 'In quote but not locked'
+ST_Q_QTY = 'Quantity mismatch'
+_Q_REVIEW = (ST_Q_QTY, ST_Q_MISSING, ST_Q_EXTRA)
+_Q_ORDER = {ST_Q_QTY: 0, ST_Q_MISSING: 1, ST_Q_EXTRA: 2, ST_Q_RELEASED: 3, ST_Q_MARKED: 4, ST_Q_MATCH: 5}
+
+
+def verify_quote(store, quote_items, ocr=False, backorders=None):
+    """Compare a Sales Quote with the most recent locked Asmodee cycle. Looks at all three tabs, so it
+    still works after part of the order has shipped. `backorders` is the backorder_list() items: units
+    still owed from earlier locks explain a quote that is larger than the lock (a released backorder),
+    and a locked item marked backorder/preorder that the quote omits is expected, not a problem."""
     rows = []
     for tab in (TAB_PLACED, TAB_SHIPPED, TAB_RECEIVED):
-        rows += [_pad(r, 14) for r in store.get(tab)[1:] if str(_pad(r, 3)[C_SUP]) == 'Asmodee']
+        rows += [(tab, _pad(r, 14)) for r in store.get(tab)[1:] if str(_pad(r, 3)[C_SUP]) == 'Asmodee']
     if not rows:
         return {'warning': 'No locked Asmodee order was found. Close a cycle first.'}
-    latest = max(_int(r[C_LAST]) for r in rows)
-    block = [r for r in rows if _int(r[C_LAST]) == latest]
-    lock_date = block[0][C_LOCK]
-    locked = {}
-    for r in block:
+    latest = max(_int(r[C_LAST]) for _, r in rows)
+    block = [(t, r) for t, r in rows if _int(r[C_LAST]) == latest]
+    lock_date = block[0][1][C_LOCK]
+    locked, flagged, titles = {}, set(), {}
+    for tab, r in block:
         sku = str(r[C_SKU]).strip()
         d = locked.setdefault(sku, {'qty': 0, 'orders': []})
         d['qty'] += _int(r[C_QTY])
+        titles.setdefault(sku, str(r[C_TITLE]))
+        if tab == TAB_PLACED and str(r[C_BACKORDER]).strip():
+            flagged.add(sku)
         for o in parse_order_names(r[C_ORDERS]):
             if o not in d['orders']:
                 d['orders'].append(o)
+    carried = {b['sku']: b['carried'] for b in (backorders or [])
+               if b.get('supplier') == 'Asmodee' and b.get('carried', 0) > 0}
+    owed_titles = {b['sku']: b.get('title', '') for b in (backorders or []) if b.get('supplier') == 'Asmodee'}
     quoted = {}
     for it in quote_items:
         sku = str(it.get('sku') or '').strip()
         quoted[sku] = quoted.get(sku, 0) + _int(it.get('quantity'))
-    snapped = []
-    if ocr:
-        quoted, snapped = snap_ocr_skus(quoted, locked)
-    titles = {}
-    for r in block:
-        titles.setdefault(str(r[C_SKU]).strip(), str(r[7]))
     qdesc = {}
     for it in quote_items:
         qdesc.setdefault(str(it.get('sku') or '').strip(), it.get('description', ''))
-    lines, mism = [], []
+    snapped = []
+    if ocr:
+        quoted, snapped = snap_ocr_skus(quoted, locked)
+    lines, to_mark, to_clear = [], [], []
     for sku in sorted(set(locked) | set(quoted)):
         l = locked.get(sku, {}).get('qty', 0)
         q = quoted.get(sku, 0)
-        status = ('Match' if l == q else
-                  'Locked but missing from quote' if q == 0 else
-                  'In quote but not locked' if l == 0 else 'Quantity mismatch')
-        row = {'sku': sku, 'issue': status, 'status': status, 'lockedQty': l, 'quotedQty': q,
-               'title': titles.get(sku) or qdesc.get(sku, ''),
-               'orderNames': ', '.join(locked.get(sku, {}).get('orders', []))}
-        lines.append(row)
-        if status != 'Match':
-            mism.append(row)
-    order = {'Quantity mismatch': 0, 'Locked but missing from quote': 1, 'In quote but not locked': 2, 'Match': 3}
-    lines.sort(key=lambda x: (order[x['status']], x['sku']))
+        c = carried.get(sku, 0)
+        f = sku in flagged
+        if q == l:
+            status = ST_Q_MATCH
+        elif q == 0:
+            status = ST_Q_MARKED if f else ST_Q_MISSING
+        elif q > l and q - l <= c:
+            status = ST_Q_RELEASED
+        elif l == 0:
+            status = ST_Q_EXTRA
+        else:
+            status = ST_Q_QTY
+        if status == ST_Q_MISSING:
+            to_mark.append(sku)
+        if f and l > 0 and q >= l:
+            to_clear.append(sku)
+        lines.append({'sku': sku, 'issue': status, 'status': status, 'lockedQty': l, 'quotedQty': q,
+                      'backorderOwed': c, 'marked': f,
+                      'title': titles.get(sku) or qdesc.get(sku, '') or owed_titles.get(sku, ''),
+                      'orderNames': ', '.join(locked.get(sku, {}).get('orders', []))})
+    lines.sort(key=lambda x: (_Q_ORDER[x['status']], x['sku']))
+    review = [x for x in lines if x['status'] in _Q_REVIEW]
     return {
-        'success': True, 'itemsInQuote': len(quote_items), 'skusLocked': len(locked),
-        'matchCount': len(lines) - len(mism), 'lines': lines,
-        'mismatchCount': len(mism), 'clean': not mism, 'mismatches': mism,
+        'success': True, 'itemsInQuote': len(quote_items), 'skusLocked': len(locked), 'lines': lines,
+        'matchCount': sum(1 for x in lines if x['status'] == ST_Q_MATCH),
+        'releasedCount': sum(1 for x in lines if x['status'] == ST_Q_RELEASED),
+        'markedCount': sum(1 for x in lines if x['status'] == ST_Q_MARKED),
+        'mismatchCount': len(review), 'clean': not review, 'mismatches': review,
+        'toMark': to_mark, 'toClear': to_clear, 'backorderListChecked': backorders is not None,
         'comparedAgainstSupplierOrderId': f'the {lock_date} lock (through order #{latest})',
         'source': 'ocr' if ocr else 'text', 'ocrSnapped': snapped,
     }
