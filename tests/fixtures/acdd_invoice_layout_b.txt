@@ -1,0 +1,47 @@
+INVOICE
+ACD Distribution LLC Invoice number: INV0001904342
+Date: 10/26/2026
+Product Qty Shipped Description MSRP Price Amount
+RVM029 1 Sleeping Gods: $39.99 $22.39 $22.39
+Primeval Peril
+MGL300717 7 Skyjo Action $11.76 $11.76 $82.32
+CTHSTRADD002 1 20 Strong: Victo- $19.95 $10.57 $10.57
+rum Add-On
+ACHMOTU0138 1 MotU: BG: $25.00 $14.50 $14.50
+Preternian Heroes
+(Wave 10)
+TMYT73109 2 Screwball Scram- $18.31 $18.31 $36.62
+ble 2
+RAN33061 1 Choose Your Own $35.99 $19.79 $19.79
+Adventure: The
+Retro Box
+FDSGLOSE 1 Box Insert: Color: $74.00 $42.18 $42.18
+Gloomhaven 2nd
+Ed
+KTG368749 1 Mycelia: The $49.00 $27.44 $27.44
+Strategic Mush-
+room Game
+PPCFGD38075 1 Captain Flip: In the $9.99 $5.39 $5.39
+Jaws of the Kraken
+GHOGHRFBOOK- 1 D&D 5E: GH2E: $60.00 $33.60 $33.60
+MG Monster Grimoire
+GHOGHRF- 1 D&D 5E: GH2E: $60.00 $33.60 $33.60
+BOOKCG Campaign Guide
+GTH8070 1 SEQUENCE Giant $37.80 $37.80 $37.80
+Tube
+ASMGME-PI 1 Pies $19.99 $11.39 $11.39
+Page 1 of 2
+=====PAGE=====
+ACD Distribution Date: 10/26/2026 Invoice number: INV0001904342
+SFG064 2 The Red Dragon $39.95 $21.57 $43.14
+Inn 9: The Underci-
+ty
+FLFTWD003 1 TWDU: RPG $39.99 $21.59 $21.59
+Starter Set
+POCTEFSE001 1 The Emerald $89.00 $49.84 $49.84
+Flame
+Subtotal $492.16
+Credit Card (3%) $14.76
+Residential $18.00
+Handling Fee $5.50
+Total $530.42

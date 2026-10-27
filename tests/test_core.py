@@ -362,6 +362,88 @@ class Http(unittest.TestCase):
                          [('729220070593', 1), ('841333138462', 2), ('841333133443', 2), ('759751002657', 1), ('787416368749', 1)])
 
 
+class AcddLayoutB(unittest.TestCase):
+    """ACDD's 10/26/26 invoices: plain-text product codes, $ amounts, no UPC line, codes that
+    wrap at a hyphen. The page showed "nothing here" because the parser found no lines."""
+    FIX = os.path.join(os.path.dirname(__file__), 'fixtures', 'acdd_invoice_layout_b.txt')
+
+    def pages(self):
+        with open(self.FIX) as f:
+            return f.read().split('=====PAGE=====\n')
+
+    def parsed(self):
+        import _parsers
+        return _parsers.parse_acdd_pages(self.pages())
+
+    def test_parse_reads_every_line_and_reconciles_to_subtotal(self):
+        no, got = self.parsed()
+        self.assertEqual(no, 'INV0001904342')
+        self.assertEqual((len(got), sum(g['quantity'] for g in got)), (16, 24))
+        self.assertEqual(round(sum(g['amount'] for g in got), 2), 492.16)          # the printed Subtotal
+        by = {g['code']: g for g in got}
+        self.assertEqual(by['TMYT73109']['quantity'], 2)
+        self.assertEqual(by['MGL300717']['quantity'], 7)
+        self.assertIn('Monster Grimoire', by['GHOGHRFBOOKMG']['description'])
+
+    def test_hyphen_wrapped_codes_are_rejoined_and_keep_the_hyphen_variant(self):
+        by = {g['code']: g for g in self.parsed()[1]}
+        self.assertEqual((by['GHOGHRFBOOKMG']['code_hy'], by['GHOGHRFBOOKCG']['code_hy']), ('GHOGHRFBOOK-MG', 'GHOGHRF-BOOKCG'))
+        self.assertEqual(by['ASMGME-PI']['code_hy'], 'ASMGME-PI')                  # a real hyphen, not a wrap
+        self.assertEqual(by['CTHSTRADD002']['description'].split()[-1], 'Victo-')  # description wrap is left alone
+
+    def test_old_layout_still_parses(self):
+        import _parsers
+        pages = ['ACD Distribution LLC Invoice number: INV0001898754\n'
+                 'Product Qty Shipped Description MSRP Price Pricing Amount\n'
+                 '|||gibberish||| 1 Point Salad 24.99 13.99 DISC 13.99\n729220070593\n'
+                 '|||gibberish2||| 2 B2 12.00 6.00 DISC 12.00\n841333138462\nSubtotal 25.99\n']
+        no, got = _parsers.parse_acdd_pages(pages)
+        self.assertEqual(no, 'INV0001898754')
+        self.assertEqual([(g['upc'], g['quantity']) for g in got], [('729220070593', 1), ('841333138462', 2)])
+
+    def _items(self):
+        import _parsers
+        saved = _parsers.parse_acdd_invoice
+        _parsers.parse_acdd_invoice = lambda data: self.parsed()
+        try:
+            return h.acdd_items([('inv.pdf', b'x')])
+        finally:
+            _parsers.parse_acdd_invoice = saved
+
+    def test_ship_matches_on_sku_or_acdd_sku_oldest_cycle_first(self):
+        s = Store()
+        s.t[c.TAB_PLACED] += [
+            placed('2026-10-19', 6051, 'ACDD', 'TMYT73109', 1, '#6047'),                          # blank ACDD SKU, SKU is the code
+            placed('2026-10-19', 6051, 'ACDD', 'GHOGHRFBOOKMG', 1, '#6038', acdd='GHOGHRFBOOKMG'),
+            placed('2026-10-19', 6051, 'ACDD', 'GHOGHRFBOOKCG', 1, '#6038', acdd='GHOGHRFBOOKCG'),
+            placed('2026-10-26', 6077, 'ACDD', 'TMYT73109', 2, '#6067, #6072'),
+            placed('2026-10-26', 6077, 'ACDD', 'MGL300717', 7, '#6053'),
+            placed('2026-10-26', 6077, 'ACDD', 'NOTONINV', 1, '#6099')]
+        its, parsed = self._items()
+        self.assertEqual(parsed, [{'filename': 'inv.pdf', 'lineItems': 16}])
+        keys = lambda sku, acdd: ({'', acdd, sku}, {'', acdd, sku})  # noqa: E731  (same shape as acdd_keys)
+        r = run(s, None, 'shipped', 'ACDD', its, keys=keys, bc=True)
+        self.assertEqual(r['unitsAdvancedToShipped'], 11)                  # 2 TMYT + 7 MGL + 1 MG + 1 CG
+        shipped = {x[3]: [] for x in s.body(c.TAB_SHIPPED)}
+        for x in s.body(c.TAB_SHIPPED):
+            shipped[x[3]].append((x[0], x[5]))
+        self.assertEqual(shipped['TMYT73109'], [('2026-10-19', 1), ('2026-10-26', 1)])   # oldest cycle first
+        self.assertEqual([x[3] for x in s.body(c.TAB_PLACED)], ['TMYT73109', 'NOTONINV'])
+        self.assertEqual(next(x for x in s.body(c.TAB_PLACED) if x[3] == 'TMYT73109')[5], 1)   # remainder stays
+
+    def test_unreadable_document_is_refused_before_anything_is_written(self):
+        import _parsers
+        saved = _parsers.parse_acdd_invoice
+        _parsers.parse_acdd_invoice = lambda data: ('', [])
+        try:
+            status, body = h.run_upload('acdd', 'shipped', [('inv.pdf', b'%PDF')], {'dry_run': 'false'})
+        finally:
+            _parsers.parse_acdd_invoice = saved
+        self.assertEqual(status, 422)
+        self.assertIn('inv.pdf', body['error'])
+        self.assertIn('Nothing was changed', body['error'])
+
+
 if __name__ == '__main__':
     unittest.main()
 

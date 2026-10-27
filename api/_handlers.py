@@ -60,8 +60,11 @@ def acdd_items(files):
     for name, data in files:
         invoice_no, got = _parsers.parse_acdd_invoice(data)
         parsed.append({'filename': name, 'lineItems': len(got)})
-        items += [{'key1': i['upc'], 'key2': i['upc'], 'quantity': i['quantity'], 'description': i['description'],
-                   'barcode': i['upc'], 'sku': '', 'invoice_no': invoice_no} for i in got]
+        # Old layout: match on the UPC. Current layout: no UPC, match on the product code
+        # (the sheet's SKU / ACDD SKU); key2 is the same code with a wrapped hyphen kept.
+        items += [{'key1': i['upc'] or i['code'], 'key2': i['upc'] or i['code_hy'] or i['code'],
+                   'quantity': i['quantity'], 'description': i['description'],
+                   'barcode': i['upc'], 'sku': i['code'], 'invoice_no': invoice_no} for i in got]
     return items, parsed
 
 
@@ -85,8 +88,9 @@ def ud_keys(store, shopify):
 
 
 def acdd_keys(store, shopify, stage):
-    """ACDD item id -> UPC through the catalog ("Garland" tab); rows whose ACDD SKU is
-    blank fall back to the Shopify variant barcode."""
+    """Older invoices carry only a UPC: ACDD item id -> UPC through the catalog ("Garland"
+    tab); rows whose ACDD SKU is blank fall back to the Shopify variant barcode. Current
+    invoices carry the product code instead, which is the row's ACDD SKU or its SKU."""
     import _tio as _io
     g = _io.read_range(_io.PRODUCT_SKUS_SHEET_ID, "'Garland'!A1:G")
     upc_by_item = {}
@@ -99,7 +103,7 @@ def acdd_keys(store, shopify, stage):
     src = store.get(core.STAGES[stage]['source'])
     blank = {str(r[core.C_SKU]).strip() for r in src[1:] if len(r) > core.C_ACDD and str(r[core.C_SUP]) == 'ACDD' and not str(r[core.C_ACDD]).strip()}
     barcodes = shopify.barcodes_for_skus(blank) if blank and shopify else {}
-    return lambda sku, acdd: ({upc_by_item.get(acdd, '')}, {barcodes.get(sku, '')})
+    return lambda sku, acdd: ({upc_by_item.get(acdd, ''), acdd, sku}, {barcodes.get(sku, ''), acdd, sku})
 
 
 SUPPLIERS = {
@@ -116,6 +120,12 @@ def run_upload(kind, stage, files, fields):
         return 400, {'error': 'No file found in upload'}
     digests = [(n, core.sha256(d)) for n, d in files]
     items, parsed = parse(files)
+    unreadable = [p['filename'] for p in parsed if not p['lineItems']]
+    if unreadable:
+        # Never carry on with an empty parse: it would show "nothing here" and (when not a dry
+        # run) record the file as processed, which then blocks the re-upload after a fix.
+        return 422, {'error': 'No line items could be read from: ' + ', '.join(unreadable) +
+                              '. The supplier may have changed the document layout. Nothing was changed.'}
     store, shopify = _io.SheetsStore(), _io.Shopify()
     keys = acdd_keys(store, shopify, stage) if kind == 'acdd' else (ud_keys(store, shopify) if kind == 'ud' else asmodee_keys(store, shopify))
     out = core.process_upload(

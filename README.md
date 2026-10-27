@@ -18,7 +18,7 @@ close-cycle ──► Order placed ──(shipping invoice)──► Shipped fro
 | Asmodee Arrival Invoice | Shipped → Order received | |
 | Universal Dist Invoice(s) (.xlsx, several allowed) | Order placed → Shipped | barcode first, then SKU |
 | Universal Dist Arrival Invoice(s) | Shipped → Order received | |
-| ACDD Invoice(s) (PDF) | Order placed → Shipped | UPC under each line → ACDD catalog ("Garland" tab) → ACDD SKU; falls back to the Shopify barcode when a row has no ACDD SKU |
+| ACDD Invoice(s) (PDF) | Order placed → Shipped | product code on each line → the sheet's ACDD SKU or SKU (current invoices, which have no UPC line; codes that wrap at a hyphen are rejoined); older invoices with a UPC line still match UPC → ACDD catalog ("Garland" tab), falling back to the Shopify barcode |
 | ACDD Arrival Invoice(s) | Shipped → Order received | ACDD sends no arrival document: upload the same invoice again |
 
 Rules that apply to every upload:

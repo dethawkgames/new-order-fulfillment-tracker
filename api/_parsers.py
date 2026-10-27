@@ -268,38 +268,78 @@ def aggregate_invoice_items(all_items):
 
 
 # ── ACD Distribution (ACDD) invoice / packing slip ───────────────────────────
-# Layout verified 10/13/26 against ACD invoice INV0001898754. Each line item is
+# Two layouts have been seen:
+#
+# LAYOUT A (10/13/26, INV0001898754): each line item is
 #   <product code in a barcode font> <qty shipped> <description> <msrp> <price> <pricing> <amount>
 # followed on the next line by the item's 12-digit UPC. The product code column is
 # barcode-font gibberish when extracted, so the UPC line is the reliable identifier
 # (it matches the "UPC" column of the Garland catalog tab, whose "ItemID" is the ACDD SKU).
+#
+# LAYOUT B (10/26/26, INV0001904342 and INV0001904356): the product code is plain text and
+# there is no UPC line. Each line item is
+#   <product code> <qty shipped> <description> $<msrp> $<price> $<amount>
+# with the description wrapping onto following lines. A long product code wraps at a hyphen
+# ("GHOGHRFBOOK-" then "MG Monster Grimoire" on the next line = GHOGHRFBOOKMG), so a code
+# that ends in "-" is completed from the first word of the next line. The code is then
+# reported both without the hyphen (the usual case) and with it (a code that really contains
+# a hyphen, such as ASMGME-PI, can also wrap there).
 import re as _re
 
 _ACDD_ITEM_RE = _re.compile(r'^(\S.*?)\s+(\d+)\s+(.+?)\s+(\d+\.\d{2})\s+(\d+\.\d{2})\s+([A-Z]{2,4})\s+(\d+\.\d{2})$')
+_ACDD_ITEM_USD_RE = _re.compile(r'^(\S+)\s+(\d+)\s+(.+?)\s+\$(\d[\d,]*\.\d{2})\s+\$(\d[\d,]*\.\d{2})\s+\$(\d[\d,]*\.\d{2})$')
 _ACDD_UPC_RE = _re.compile(r'^\d{8,14}$')
 
 
-def parse_acdd_invoice(file_bytes):
-    """Returns (invoice_number, [{'upc', 'quantity', 'description'}])."""
+def parse_acdd_pages(pages):
+    """pages: list of page text strings. Returns (invoice_number, items); each item is
+    {'upc', 'code', 'code_hy', 'quantity', 'description', 'amount'} ('upc' only in layout A,
+    'code'/'code_hy' only in layout B). Stops at the Subtotal line."""
     items = []
     invoice_no = ''
-    pending = None
-    with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-        for page in pdf.pages:
-            for raw in (page.extract_text() or '').split('\n'):
-                line = raw.strip()
-                m = _re.search(r'Invoice number:\s*(\S+)', line)
-                if m and not invoice_no:
-                    invoice_no = m.group(1)
-                if line.startswith('Subtotal'):
-                    pending = None
-                    return invoice_no, items
-                mi = _ACDD_ITEM_RE.match(line)
-                if mi:
-                    pending = {'upc': '', 'quantity': int(mi.group(2)), 'description': mi.group(3)}
-                    items.append(pending)
-                    continue
-                if pending is not None and not pending['upc'] and _ACDD_UPC_RE.match(line):
-                    pending['upc'] = line
-                    pending = None
+    pending = None       # item awaiting its UPC line (layout A)
+    wrapped = None       # item whose code wrapped at a hyphen (layout B)
+    for text in pages:
+        for raw in (text or '').split('\n'):
+            line = raw.strip()
+            m = _re.search(r'Invoice number:\s*(\S+)', line)
+            if m and not invoice_no:
+                invoice_no = m.group(1)
+            if line.startswith('Subtotal'):
+                return invoice_no, items
+            mu = _ACDD_ITEM_USD_RE.match(line)
+            if mu:
+                code = mu.group(1)
+                item = {'upc': '', 'code': code, 'code_hy': code, 'quantity': int(mu.group(2)),
+                        'description': mu.group(3), 'amount': float(mu.group(6).replace(',', ''))}
+                items.append(item)
+                pending = None
+                wrapped = item if code.endswith('-') else None
+                continue
+            mi = _ACDD_ITEM_RE.match(line)
+            if mi:
+                pending = {'upc': '', 'code': '', 'code_hy': '', 'quantity': int(mi.group(2)),
+                           'description': mi.group(3), 'amount': float(mi.group(7))}
+                items.append(pending)
+                wrapped = None
+                continue
+            if wrapped is not None:
+                parts = line.split(None, 1)
+                if parts:
+                    wrapped['code_hy'] = wrapped['code'] + parts[0]
+                    wrapped['code'] = wrapped['code'].rstrip('-') + parts[0]
+                    if len(parts) > 1:
+                        wrapped['description'] = (wrapped['description'] + ' ' + parts[1]).strip()
+                wrapped = None
+                continue
+            if pending is not None and not pending['upc'] and _ACDD_UPC_RE.match(line):
+                pending['upc'] = line
+                pending = None
     return invoice_no, items
+
+
+def parse_acdd_invoice(file_bytes):
+    """Returns (invoice_number, [{'upc', 'code', 'code_hy', 'quantity', 'description', 'amount'}])."""
+    with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+        pages = [page.extract_text() or '' for page in pdf.pages]
+    return parse_acdd_pages(pages)
