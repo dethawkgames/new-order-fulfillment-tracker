@@ -58,13 +58,21 @@ def acdd_items(files):
     import _parsers
     items, parsed = [], []
     for name, data in files:
-        invoice_no, got = _parsers.parse_acdd_invoice(data)
-        parsed.append({'filename': name, 'lineItems': len(got)})
-        # Old layout: match on the UPC. Current layout: no UPC, match on the product code
-        # (the sheet's SKU / ACDD SKU); key2 is the same code with a wrapped hyphen kept.
-        items += [{'key1': i['upc'] or i['code'], 'key2': i['upc'] or i['code_hy'] or i['code'],
-                   'quantity': i['quantity'], 'description': i['description'],
-                   'barcode': i['upc'], 'sku': i['code'], 'invoice_no': invoice_no} for i in got]
+        invoice_no, got, subtotal = _parsers.parse_acdd_document(data)
+        entry = {'filename': name, 'lineItems': len(got), 'invoiceNumber': invoice_no}
+        total = round(sum(i['amount'] for i in got), 2)
+        if got and subtotal is not None and abs(total - subtotal) > 0.02:
+            # Some lines were misread or skipped: refuse the whole file rather than ship a partial set.
+            entry['lineItems'] = 0
+            entry['problem'] = (f'the {len(got)} line(s) that could be read add up to ${total:,.2f}, '
+                                f'but the invoice subtotal is ${subtotal:,.2f}')
+        parsed.append(entry)
+        if entry['lineItems']:
+            # Older/barcode layout: match on the UPC. Text layout: no UPC, match on the product code
+            # (the sheet's SKU / ACDD SKU); key2 is the same code with a wrapped hyphen kept.
+            items += [{'key1': i['upc'] or i['code'], 'key2': i['upc'] or i['code_hy'] or i['code'],
+                       'quantity': i['quantity'], 'description': i['description'],
+                       'barcode': i['upc'], 'sku': i['code'], 'invoice_no': invoice_no} for i in got]
     return items, parsed
 
 
@@ -103,7 +111,9 @@ def acdd_keys(store, shopify, stage):
     src = store.get(core.STAGES[stage]['source'])
     blank = {str(r[core.C_SKU]).strip() for r in src[1:] if len(r) > core.C_ACDD and str(r[core.C_SUP]) == 'ACDD' and not str(r[core.C_ACDD]).strip()}
     barcodes = shopify.barcodes_for_skus(blank) if blank and shopify else {}
-    return lambda sku, acdd: ({upc_by_item.get(acdd, ''), acdd, sku}, {barcodes.get(sku, ''), acdd, sku})
+    # A row with a blank ACDD SKU is keyed by its own SKU, which is the catalog ItemID in practice.
+    return lambda sku, acdd: ({upc_by_item.get(acdd, ''), upc_by_item.get(sku, ''), acdd, sku},
+                              {barcodes.get(sku, ''), acdd, sku})
 
 
 SUPPLIERS = {
@@ -120,11 +130,12 @@ def run_upload(kind, stage, files, fields):
         return 400, {'error': 'No file found in upload'}
     digests = [(n, core.sha256(d)) for n, d in files]
     items, parsed = parse(files)
-    unreadable = [p['filename'] for p in parsed if not p['lineItems']]
+    unreadable = [p for p in parsed if not p['lineItems']]
     if unreadable:
-        # Never carry on with an empty parse: it would show "nothing here" and (when not a dry
-        # run) record the file as processed, which then blocks the re-upload after a fix.
-        return 422, {'error': 'No line items could be read from: ' + ', '.join(unreadable) +
+        # Never carry on with an empty or partial parse: it would show a misleading preview and (when
+        # not a dry run) record the file as processed, which then blocks the re-upload after a fix.
+        why = '; '.join(f"{p['filename']} ({p.get('problem') or 'no line items found'})" for p in unreadable)
+        return 422, {'error': 'Could not read this document correctly: ' + why +
                               '. The supplier may have changed the document layout. Nothing was changed.'}
     store, shopify = _io.SheetsStore(), _io.Shopify()
     keys = acdd_keys(store, shopify, stage) if kind == 'acdd' else (ud_keys(store, shopify) if kind == 'ud' else asmodee_keys(store, shopify))

@@ -403,12 +403,13 @@ class AcddLayoutB(unittest.TestCase):
 
     def _items(self):
         import _parsers
-        saved = _parsers.parse_acdd_invoice
-        _parsers.parse_acdd_invoice = lambda data: self.parsed()
+        saved = _parsers.parse_acdd_document
+        no, got = self.parsed()
+        _parsers.parse_acdd_document = lambda data: (no, got, _parsers.acdd_subtotal(self.pages()))
         try:
             return h.acdd_items([('inv.pdf', b'x')])
         finally:
-            _parsers.parse_acdd_invoice = saved
+            _parsers.parse_acdd_document = saved
 
     def test_ship_matches_on_sku_or_acdd_sku_oldest_cycle_first(self):
         s = Store()
@@ -420,7 +421,7 @@ class AcddLayoutB(unittest.TestCase):
             placed('2026-10-26', 6077, 'ACDD', 'MGL300717', 7, '#6053'),
             placed('2026-10-26', 6077, 'ACDD', 'NOTONINV', 1, '#6099')]
         its, parsed = self._items()
-        self.assertEqual(parsed, [{'filename': 'inv.pdf', 'lineItems': 16}])
+        self.assertEqual(parsed, [{'filename': 'inv.pdf', 'lineItems': 16, 'invoiceNumber': 'INV0001904342'}])
         keys = lambda sku, acdd: ({'', acdd, sku}, {'', acdd, sku})  # noqa: E731  (same shape as acdd_keys)
         r = run(s, None, 'shipped', 'ACDD', its, keys=keys, bc=True)
         self.assertEqual(r['unitsAdvancedToShipped'], 11)                  # 2 TMYT + 7 MGL + 1 MG + 1 CG
@@ -433,15 +434,88 @@ class AcddLayoutB(unittest.TestCase):
 
     def test_unreadable_document_is_refused_before_anything_is_written(self):
         import _parsers
-        saved = _parsers.parse_acdd_invoice
-        _parsers.parse_acdd_invoice = lambda data: ('', [])
+        saved = _parsers.parse_acdd_document
+        _parsers.parse_acdd_document = lambda data: ('', [], None)
         try:
             status, body = h.run_upload('acdd', 'shipped', [('inv.pdf', b'%PDF')], {'dry_run': 'false'})
         finally:
-            _parsers.parse_acdd_invoice = saved
+            _parsers.parse_acdd_document = saved
         self.assertEqual(status, 422)
         self.assertIn('inv.pdf', body['error'])
         self.assertIn('Nothing was changed', body['error'])
+
+
+class AcddBarcodeLayout(unittest.TestCase):
+    """ACDD's barcode-font rendering: garbled product code, a quantity that can be "1*" or be preceded by
+    spilled digits ("14673918 1*"), and a pricing column that is blank on some lines. The page read
+    D&L's quantity as 14673918 and dropped the Player's Guide line."""
+    FX = os.path.join(os.path.dirname(__file__), 'fixtures')
+
+    def pages(self, name):
+        with open(os.path.join(self.FX, name)) as f:
+            return f.read().split('=====PAGE=====\n')
+
+    def test_new_invoice_reads_all_six_lines_with_right_quantities(self):
+        import _parsers
+        pages = self.pages('acdd_invoice_barcode_new.txt')
+        no, got = _parsers.parse_acdd_pages(pages)
+        self.assertEqual(no, 'INV0001905520')
+        self.assertEqual([(g['upc'], g['quantity']) for g in got],
+                         [('5901414673918', 1), ('5901414676278', 1), ('841333128340', 1),
+                          ('841333134129', 1), ('9781763592612', 1), ('035261080706', 1)])
+        self.assertEqual(round(sum(g['amount'] for g in got), 2), _parsers.acdd_subtotal(pages))
+        self.assertEqual(got[0]['description'], 'D&L: Grand Stronghold')
+
+    def test_rerender_matches_the_text_layout_of_the_same_invoice(self):
+        import _parsers
+        pages = self.pages('acdd_invoice_barcode_rerender.txt')
+        no, got = _parsers.parse_acdd_pages(pages)
+        self.assertEqual((no, len(got), sum(g['quantity'] for g in got)), ('INV0001904342', 16, 24))
+        self.assertEqual(round(sum(g['amount'] for g in got), 2), 492.16)
+        by = {g['upc']: g for g in got}
+        self.assertEqual(by['4260470080025']['quantity'], 7)                       # "7*" glued to the quantity
+        self.assertEqual(by['9781945323522']['quantity'], 2)
+        self.assertEqual(by['704725643695']['description'], '20 Strong: Victorum Add-On')   # blank pricing column
+
+    def test_partial_read_is_refused_with_the_reason(self):
+        import _parsers
+        pages = self.pages('acdd_invoice_barcode_new.txt')
+        no, got = _parsers.parse_acdd_pages(pages)
+        saved = _parsers.parse_acdd_document
+        _parsers.parse_acdd_document = lambda data: (no, got[:-1], _parsers.acdd_subtotal(pages))   # one line lost
+        try:
+            status, body = h.run_upload('acdd', 'shipped', [('inv.pdf', b'x')], {'dry_run': 'false'})
+        finally:
+            _parsers.parse_acdd_document = saved
+        self.assertEqual(status, 422)
+        self.assertIn('$323.13', body['error'])
+        self.assertIn('$360.93', body['error'])
+        self.assertIn('Nothing was changed', body['error'])
+
+    def test_blank_acdd_sku_row_matches_on_upc_through_its_own_sku(self):
+        """GTH8070 has no ACDD SKU on the sheet; the catalog's ItemID is the SKU itself."""
+        import _parsers
+        import _tio as _io
+        no, got = _parsers.parse_acdd_pages(self.pages('acdd_invoice_barcode_new.txt'))
+        garland = [['ItemID', 'ShortDesc', 'MSRP', 'Product Type', 'Status', 'Street Date', 'UPC'],
+                   ['GTH8070', 'SEQUENCE Giant Tube', '', '', '', '', '035261080706'],
+                   ['ACHDNL0054', 'D&L: Grand Stronghold', '', '', '', '', '5901414673918'],
+                   ['GHOGHRFBOOKPG', "Player's Guide", '', '', '', '', '9781763592612']]
+        s = Store()
+        s.t[c.TAB_PLACED] += [placed('2026-10-27', 6080, 'ACDD', 'GTH8070', 1, '#6079'),
+                              placed('2026-10-27', 6080, 'ACDD', 'DNL0054', 1, '#6080', acdd='ACHDNL0054'),
+                              placed('2026-10-19', 6051, 'ACDD', 'GHOGHRFBOOKPG', 1, '#6038', acdd='GHOGHRFBOOKPG')]
+        saved_doc, saved_rr = _parsers.parse_acdd_document, _io.read_range
+        _parsers.parse_acdd_document = lambda data: (no, got, None)
+        _io.read_range = lambda *a, **k: garland
+        try:
+            its, _ = h.acdd_items([('inv.pdf', b'x')])
+            keys = h.acdd_keys(s, None, 'shipped')
+        finally:
+            _parsers.parse_acdd_document, _io.read_range = saved_doc, saved_rr
+        r = run(s, None, 'shipped', 'ACDD', its, keys=keys, bc=True)
+        self.assertEqual(r['unitsAdvancedToShipped'], 3)
+        self.assertEqual(s.body(c.TAB_PLACED), [])
 
 
 if __name__ == '__main__':

@@ -268,15 +268,19 @@ def aggregate_invoice_items(all_items):
 
 
 # ── ACD Distribution (ACDD) invoice / packing slip ───────────────────────────
-# Two layouts have been seen:
+# Three renderings have been seen. All carry, per line: product code, qty shipped, description,
+# MSRP, unit price, amount (= qty x unit price).
 #
-# LAYOUT A (10/13/26, INV0001898754): each line item is
-#   <product code in a barcode font> <qty shipped> <description> <msrp> <price> <pricing> <amount>
-# followed on the next line by the item's 12-digit UPC. The product code column is
-# barcode-font gibberish when extracted, so the UPC line is the reliable identifier
-# (it matches the "UPC" column of the Garland catalog tab, whose "ItemID" is the ACDD SKU).
+# BARCODE LAYOUT (10/13/26 INV0001898754; 10/26/26 and 10/28/26 re-renders of the same invoices):
+#   <product code in a barcode font> <qty shipped> <description> <msrp> <price> [<pricing>] <amount>
+# followed on the next line by the item's 12-digit UPC. The product code is barcode-font gibberish
+# when extracted (sometimes spilling extra digit tokens before the quantity, and the quantity can
+# carry a stray "*", e.g. "1*"), so neither the code nor the quantity token can be trusted. The UPC
+# line is the reliable identifier (it matches the "UPC" column of the Garland catalog tab, whose
+# "ItemID" is the ACDD SKU), and the quantity is taken from amount / unit price. The pricing
+# column ("SDI", "NPI") is blank on some lines.
 #
-# LAYOUT B (10/26/26, INV0001904342 and INV0001904356): the product code is plain text and
+# TEXT LAYOUT (10/26/26, INV0001904342 and INV0001904356): the product code is plain text and
 # there is no UPC line. Each line item is
 #   <product code> <qty shipped> <description> $<msrp> $<price> $<amount>
 # with the description wrapping onto following lines. A long product code wraps at a hyphen
@@ -284,21 +288,66 @@ def aggregate_invoice_items(all_items):
 # that ends in "-" is completed from the first word of the next line. The code is then
 # reported both without the hyphen (the usual case) and with it (a code that really contains
 # a hyphen, such as ASMGME-PI, can also wrap there).
+#
+# Every invoice also prints a Subtotal that equals the sum of the line amounts; callers use
+# that to detect a document that was only partly read.
 import re as _re
 
-_ACDD_ITEM_RE = _re.compile(r'^(\S.*?)\s+(\d+)\s+(.+?)\s+(\d+\.\d{2})\s+(\d+\.\d{2})\s+([A-Z]{2,4})\s+(\d+\.\d{2})$')
-_ACDD_ITEM_USD_RE = _re.compile(r'^(\S+)\s+(\d+)\s+(.+?)\s+\$(\d[\d,]*\.\d{2})\s+\$(\d[\d,]*\.\d{2})\s+\$(\d[\d,]*\.\d{2})$')
+_MONEY = r'\d[\d,]*\.\d{2}'
+_ACDD_ITEM_RE = _re.compile(r'^(?P<head>\S.*?)\s+(?P<msrp>' + _MONEY + r')\s+(?P<price>' + _MONEY + r')'
+                            r'(?:\s+(?P<pricing>[A-Z]{2,4}))?\s+(?P<amount>' + _MONEY + r')$')
+_ACDD_ITEM_USD_RE = _re.compile(r'^(\S+)\s+(\d+)\s+(.+?)\s+\$(' + _MONEY + r')\s+\$(' + _MONEY + r')\s+\$(' + _MONEY + r')$')
 _ACDD_UPC_RE = _re.compile(r'^\d{8,14}$')
+_ACDD_SUBTOTAL_RE = _re.compile(r'^Subtotal\s+\$?(' + _MONEY + r')')
+
+
+def _money(v):
+    return float(v.replace(',', ''))
+
+
+def _barcode_line_item(m):
+    """Item from a barcode-layout line, or None when the quantity cannot be established."""
+    price, amount = _money(m.group('price')), _money(m.group('amount'))
+    toks = m.group('head').split()
+    qty = None
+    if price > 0:
+        q = int(round(amount / price))
+        if q >= 1 and abs(q * price - amount) <= max(0.02, 0.01 * q):
+            qty = q
+    if qty is None:                          # fall back to the quantity token itself
+        for t in toks[1:4]:
+            if t.rstrip('*').isdigit() and len(t.rstrip('*')) <= 3:
+                qty = int(t.rstrip('*'))
+                break
+    if qty is None:
+        return None
+    desc_toks = toks[1:]
+    for i in range(1, min(len(toks), 5)):    # description starts after the quantity token
+        if toks[i].rstrip('*') == str(qty):
+            desc_toks = toks[i + 1:]
+            break
+    return {'upc': '', 'code': '', 'code_hy': '', 'quantity': qty,
+            'description': ' '.join(desc_toks), 'amount': amount}
+
+
+def acdd_subtotal(pages):
+    """The invoice's printed Subtotal, or None."""
+    for text in pages:
+        for raw in (text or '').split('\n'):
+            m = _ACDD_SUBTOTAL_RE.match(raw.strip())
+            if m:
+                return _money(m.group(1))
+    return None
 
 
 def parse_acdd_pages(pages):
     """pages: list of page text strings. Returns (invoice_number, items); each item is
-    {'upc', 'code', 'code_hy', 'quantity', 'description', 'amount'} ('upc' only in layout A,
-    'code'/'code_hy' only in layout B). Stops at the Subtotal line."""
+    {'upc', 'code', 'code_hy', 'quantity', 'description', 'amount'} ('upc' only in the barcode
+    layout, 'code'/'code_hy' only in the text layout). Stops at the Subtotal line."""
     items = []
     invoice_no = ''
-    pending = None       # item awaiting its UPC line (layout A)
-    wrapped = None       # item whose code wrapped at a hyphen (layout B)
+    pending = None       # item awaiting its UPC line (barcode layout)
+    wrapped = None       # item whose code wrapped at a hyphen (text layout)
     for text in pages:
         for raw in (text or '').split('\n'):
             line = raw.strip()
@@ -311,16 +360,17 @@ def parse_acdd_pages(pages):
             if mu:
                 code = mu.group(1)
                 item = {'upc': '', 'code': code, 'code_hy': code, 'quantity': int(mu.group(2)),
-                        'description': mu.group(3), 'amount': float(mu.group(6).replace(',', ''))}
+                        'description': mu.group(3), 'amount': _money(mu.group(6))}
                 items.append(item)
                 pending = None
                 wrapped = item if code.endswith('-') else None
                 continue
             mi = _ACDD_ITEM_RE.match(line)
             if mi:
-                pending = {'upc': '', 'code': '', 'code_hy': '', 'quantity': int(mi.group(2)),
-                           'description': mi.group(3), 'amount': float(mi.group(7))}
-                items.append(pending)
+                item = _barcode_line_item(mi)
+                if item is not None:
+                    items.append(item)
+                pending = item
                 wrapped = None
                 continue
             if wrapped is not None:
@@ -338,8 +388,15 @@ def parse_acdd_pages(pages):
     return invoice_no, items
 
 
-def parse_acdd_invoice(file_bytes):
-    """Returns (invoice_number, [{'upc', 'code', 'code_hy', 'quantity', 'description', 'amount'}])."""
+def parse_acdd_document(file_bytes):
+    """Returns (invoice_number, items, printed_subtotal_or_None)."""
     with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
         pages = [page.extract_text() or '' for page in pdf.pages]
-    return parse_acdd_pages(pages)
+    invoice_no, items = parse_acdd_pages(pages)
+    return invoice_no, items, acdd_subtotal(pages)
+
+
+def parse_acdd_invoice(file_bytes):
+    """Returns (invoice_number, [{'upc', 'code', 'code_hy', 'quantity', 'description', 'amount'}])."""
+    invoice_no, items, _ = parse_acdd_document(file_bytes)
+    return invoice_no, items
